@@ -15,8 +15,16 @@ What is modelled, and what deliberately is not
   The app does not know the real magnitudes. They are applied only when the
   user enters BOTH the chance and the magnitude; otherwise they are skipped and
   the result says so. No reagent is assumed eligible unless flagged.
-* NOT modelled yet: Ingenuity, concentration, output quality tiers, skill
-  thresholds, price impact of selling many items.
+* Output quality: each quality tier is its own item ID with its own price. The
+  app never guesses tier odds - ``analyse_quality_tiers`` shows the profit if
+  every craft lands in one tier, and an expected profit only from odds the user
+  enters (they must add up to 100%).
+* Break-even material price (``breakeven_reagent_price``): the highest price of
+  one reagent at which a craft still breaks even.
+* Mechanics can be filled from a saved profession profile
+  (``mechanics_from_profile``); the size of each effect must be measured by the user.
+* NOT modelled yet: Ingenuity, concentration, skill thresholds / recipe difficulty,
+  price impact of selling many items.
 
 A missing price makes the result incomplete (profit is None); it is never 0.
 """
@@ -29,8 +37,8 @@ from typing import Callable, Optional
 
 from .recipes import Reagent, Recipe
 
-NOT_MODELLED_NOTE = ("Ingenuity, concentration, output quality and price impact are not modelled "
-                     "in this calculator.")
+NOT_MODELLED_NOTE = ("Ingenuity, concentration, skill vs recipe difficulty and price impact are not "
+                     "modelled in this calculator.")
 
 
 @dataclass(frozen=True)
@@ -294,3 +302,129 @@ def days_to_sell(units: float, sold_per_day: Optional[float]) -> Optional[float]
             or sold_per_day <= 0:
         return None
     return units / sold_per_day
+
+
+# --- profession profiles -> mechanics ------------------------------------------------------------
+
+def mechanics_from_profile(profile) -> tuple:
+    """(Mechanics, notes) from a ``profiles.ProfessionProfile``.
+
+    The chance comes from the profile's Resourcefulness % / Multicraft %; the size of each
+    effect comes from the separately measured fields. An effect with either part missing
+    is left off and a note says why. Nothing is assumed additive.
+    """
+    def pct(value):
+        return None if value is None else float(value) / 100
+
+    notes = ["Assumes the Resourcefulness % and Multicraft % you entered are proc chances as shown "
+             "in the profession window."]
+    rc, rs = pct(profile.resourcefulness_pct), pct(profile.resourcefulness_saved_pct)
+    mc, me = pct(profile.multicraft_pct), pct(profile.multicraft_extra_pct)
+    for label, chance, size in (("Resourcefulness", rc, rs), ("Multicraft", mc, me)):
+        if chance is None:
+            notes.append(f"{label} % is not entered in this profile - not applied.")
+        elif size is None:
+            notes.append(f"{label}: the profile has a chance but no measured size - not applied.")
+    mechanics = Mechanics(
+        resourcefulness_chance=min(rc or 0.0, 1.0), resourcefulness_saved_fraction=rs,
+        multicraft_chance=min(mc or 0.0, 1.0), multicraft_extra_fraction=me)
+    mechanics.validate()
+    return mechanics, notes
+
+
+# --- break-even material price ---------------------------------------------------------------------
+
+def breakeven_reagent_price(result: CraftResult, item_id: int,
+                            mechanics: Optional[Mechanics] = None) -> Optional[float]:
+    """Highest unit price of ``item_id`` (one of the chosen reagents) at which profit is 0.
+
+    Works even when that reagent's own price is missing, as long as the output price and
+    every OTHER reagent are priced. Expected Resourcefulness savings are included when the
+    reagent is savings-eligible. ``None`` when it cannot be computed or the reagent is not used.
+    """
+    mechanics = mechanics or Mechanics()
+    target = [l for l in result.lines if l.item_id == item_id]
+    if not target or result.net_per_craft is None:
+        return None
+    line = target[0]
+
+    def saved_share(l: ReagentLine) -> float:
+        if mechanics.resourcefulness_applied and l.savings_eligible:
+            return mechanics.resourcefulness_chance * mechanics.resourcefulness_saved_fraction
+        return 0.0
+
+    others = [l for l in result.lines if l is not line]
+    if any(l.line_cost_copper is None for l in others):
+        return None
+    other_cost = sum(l.line_cost_copper * (1 - saved_share(l)) for l in others)
+    per_unit = line.quantity * (1 - saved_share(line))
+    if per_unit <= 0:
+        return None
+    return (result.net_per_craft - other_cost) / per_unit
+
+
+# --- output quality tiers ------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TierLine:
+    label: str
+    item_id: int
+    name: Optional[str]
+    price_copper: Optional[float]
+    probability: Optional[float]          # 0..1, user-entered; None = not entered
+    net_per_craft: Optional[float]        # if every craft gave this tier
+    profit_if_all: Optional[float]
+    profitable: Optional[bool]
+
+
+@dataclass(frozen=True)
+class QualityAnalysis:
+    lines: tuple
+    breakeven_output_price: Optional[float]   # the same for every tier
+    probability_total: Optional[float]
+    expected_net_per_craft: Optional[float]
+    expected_profit_per_craft: Optional[float]
+    notes: tuple
+
+
+def analyse_quality_tiers(result: CraftResult, tiers: list, prices: dict,
+                          probabilities: Optional[dict] = None) -> QualityAnalysis:
+    """Profit per quality tier for a craft whose reagent cost is in ``result``.
+
+    ``tiers``         [(label, item_id, name)] - each tier is its own item
+    ``prices``        item_id -> copper (None = unknown)
+    ``probabilities`` label -> 0..1 chance of that tier, typed by the user (optional)
+
+    The expected profit is only given when the odds of every tier are entered, add up
+    to 100%, and every tier with a non-zero chance has a price.
+    """
+    probabilities = probabilities or {}
+    keep = (1 - result.ah_cut) * result.sell_through
+    cost = result.cost_per_craft
+    lines, notes = [], []
+    for label, item_id, name in tiers:
+        price = prices.get(item_id)
+        net = None if price is None else result.output_units * price * keep
+        profit = None if net is None or cost is None else net - cost
+        lines.append(TierLine(label, item_id, name, price, probabilities.get(label), net, profit,
+                              None if profit is None else profit > 0))
+
+    entered = [l.probability for l in lines if l.probability is not None]
+    total = sum(entered) if entered else None
+    expected_net = expected_profit = None
+    if not lines:
+        notes.append("No quality tiers set for this recipe.")
+    elif len(entered) < len(lines):
+        notes.append("Enter the chance of every tier (from your own crafting results) to get an "
+                     "expected profit. This app does not know the odds.")
+    elif abs(total - 1.0) > 1e-6:
+        notes.append(f"Tier chances add up to {total * 100:g}%, not 100% - no expected profit shown.")
+    elif any(l.price_copper is None and l.probability > 0 for l in lines):
+        notes.append("A tier with a non-zero chance has no price - no expected profit shown.")
+    else:
+        expected_net = sum(l.net_per_craft * l.probability for l in lines if l.probability > 0)
+        expected_profit = None if cost is None else expected_net - cost
+    if cost is None:
+        notes.append("Reagent cost is incomplete, so tier profits cannot be calculated.")
+    return QualityAnalysis(tuple(lines), result.breakeven_output_price, total, expected_net,
+                           expected_profit, tuple(notes))

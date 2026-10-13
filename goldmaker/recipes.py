@@ -347,6 +347,19 @@ def parse_recipes_json(text: str, lookup: Optional[Lookup] = None) -> ImportResu
     return _build(rows, lookup)
 
 
+def parse_recipe_rows(rows: list, lookup: Optional[Lookup] = None) -> ImportResult:
+    """Parse rows that are already dicts with the CSV column names (e.g. a spreadsheet sheet).
+
+    ``rows`` is a list of ``(row_number, dict)`` pairs; the number is used in error messages.
+    """
+    return _build(rows, lookup)
+
+
+def flat_rows(recipes: list) -> list:
+    """One dict per reagent with the CSV column names (the file format, as data)."""
+    return _flat_rows(recipes)
+
+
 def parse_recipes(text: str, lookup: Optional[Lookup] = None) -> ImportResult:
     """Detect JSON vs CSV and parse."""
     stripped = text.lstrip("\ufeff").lstrip()

@@ -100,9 +100,11 @@ CREATE TABLE IF NOT EXISTS character_professions (
     PRIMARY KEY (character_key, profession)
 );
 
--- Milling experiments: one row per batch, plus the items it produced.
+-- Processing experiments (milling, prospecting): one row per batch, plus the items it produced.
+-- The table keeps its original milling name; "herb_*" columns hold the input item (herb or ore).
 CREATE TABLE IF NOT EXISTS milling_experiments (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+    process                TEXT NOT NULL DEFAULT 'milling',
     herb_item_id           INTEGER NOT NULL,
     herb_name              TEXT,
     herbs_used             INTEGER NOT NULL CHECK (herbs_used > 0),
@@ -176,9 +178,29 @@ CREATE TABLE IF NOT EXISTS profession_stats (
     ingenuity_pct        REAL,
     notes                TEXT,
     updated_at           TEXT NOT NULL,
+    resourcefulness_saved_pct  REAL,          -- measured share of eligible reagents saved per proc
+    multicraft_extra_pct       REAL,          -- measured extra output per proc, % of base output
     PRIMARY KEY (character_key, profession)
 );
+
+-- Output quality tiers of a recipe: each tier is its own item ID (e.g. silver / gold quality).
+CREATE TABLE IF NOT EXISTS recipe_output_tiers (
+    recipe_id   INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    tier_label  TEXT NOT NULL,
+    item_id     INTEGER NOT NULL CHECK (item_id > 0),
+    item_name   TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (recipe_id, tier_label)
+);
 """
+
+PROCESSES = ("milling", "prospecting")
+
+# Columns added after the first release. ``connect`` adds them to older databases.
+_ADDED_COLUMNS = {
+    "milling_experiments": [("process", "TEXT NOT NULL DEFAULT 'milling'")],
+    "profession_stats": [("resourcefulness_saved_pct", "REAL"), ("multicraft_extra_pct", "REAL")],
+}
 
 PRICE_TABLE_COLUMNS = [
     "item_id", "name", "market_value", "min_buyout", "recent",
@@ -214,7 +236,20 @@ def connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring a database created by an older version up to date (adds columns only)."""
+    for table, columns in _ADDED_COLUMNS.items():
+        present = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, definition in columns:
+            if name not in present:
+                with conn:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_experiments_process "
+                 "ON milling_experiments(process, herb_item_id)")
 
 
 # --- Datasets & prices --------------------------------------------------------
@@ -466,19 +501,27 @@ def upsert_profession_stats(conn: sqlite3.Connection, character_key: str, profes
                             multicraft_pct: Optional[float] = None,
                             resourcefulness_pct: Optional[float] = None,
                             ingenuity_pct: Optional[float] = None,
-                            notes: str = "") -> None:
+                            notes: str = "",
+                            resourcefulness_saved_pct: Optional[float] = None,
+                            multicraft_extra_pct: Optional[float] = None) -> None:
     for label, value in (("crafting skill", crafting_skill), ("multicraft", multicraft_pct),
-                         ("resourcefulness", resourcefulness_pct), ("ingenuity", ingenuity_pct)):
+                         ("resourcefulness", resourcefulness_pct), ("ingenuity", ingenuity_pct),
+                         ("resourcefulness saved share", resourcefulness_saved_pct),
+                         ("multicraft extra output", multicraft_extra_pct)):
         if value is not None and value < 0:
             raise ValueError(f"{label} cannot be negative.")
+    if resourcefulness_saved_pct is not None and resourcefulness_saved_pct > 100:
+        raise ValueError("resourcefulness saved share cannot be above 100%.")
     with conn:
         conn.execute(
             """INSERT OR REPLACE INTO profession_stats
                (character_key, profession, crafting_skill, multicraft_pct,
-                resourcefulness_pct, ingenuity_pct, notes, updated_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
+                resourcefulness_pct, ingenuity_pct, notes, updated_at,
+                resourcefulness_saved_pct, multicraft_extra_pct)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (character_key, profession, crafting_skill, multicraft_pct,
-             resourcefulness_pct, ingenuity_pct, notes, utc_now_iso()),
+             resourcefulness_pct, ingenuity_pct, notes, utc_now_iso(),
+             resourcefulness_saved_pct, multicraft_extra_pct),
         )
 
 
@@ -502,21 +545,28 @@ def list_profession_stats(conn: sqlite3.Connection) -> pd.DataFrame:
         "SELECT * FROM profession_stats ORDER BY character_key, profession", conn)
 
 
-# --- Milling experiments -------------------------------------------------------------
+# --- Processing experiments (milling, prospecting) ---------------------------------------
 
-def add_milling_experiment(conn: sqlite3.Connection, herb_item_id: int, herbs_used: int,
-                           outputs: list, herb_name: Optional[str] = None,
-                           performed_at: Optional[str] = None, notes: str = "",
-                           herb_cost_each_copper: Optional[int] = None,
-                           observed_prices: Optional[dict] = None) -> int:
-    """Record one milling batch and return its id.
+def _check_process(process: str) -> str:
+    if process not in PROCESSES:
+        raise ValueError(f"Unknown process '{process}'. Choose from {PROCESSES}.")
+    return process
+
+
+def add_experiment(conn: sqlite3.Connection, process: str, input_item_id: int, units_used: int,
+                   outputs: list, input_name: Optional[str] = None,
+                   performed_at: Optional[str] = None, notes: str = "",
+                   input_cost_each_copper: Optional[int] = None,
+                   observed_prices: Optional[dict] = None) -> int:
+    """Record one batch (e.g. 40 herbs milled, 100 ore prospected) and return its id.
 
     ``outputs`` is a list of ``{"item_id", "name", "quantity"}`` dicts. Duplicate
     item ids are summed. Quantity 0 is allowed (an item that was expected but
     did not drop is real information).
     """
-    if herbs_used is None or herbs_used <= 0:
-        raise ValueError("Herbs used must be greater than zero.")
+    _check_process(process)
+    if units_used is None or units_used <= 0:
+        raise ValueError("Units used must be greater than zero.")
     merged: dict = {}
     for out in outputs:
         quantity = int(out["quantity"])
@@ -530,11 +580,11 @@ def add_milling_experiment(conn: sqlite3.Connection, herb_item_id: int, herbs_us
     with conn:
         cursor = conn.execute(
             """INSERT INTO milling_experiments
-               (herb_item_id, herb_name, herbs_used, performed_at, notes,
+               (process, herb_item_id, herb_name, herbs_used, performed_at, notes,
                 herb_cost_each_copper, observed_prices_json, created_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (int(herb_item_id), herb_name, int(herbs_used), performed_at, notes,
-             herb_cost_each_copper,
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (process, int(input_item_id), input_name, int(units_used), performed_at, notes,
+             input_cost_each_copper,
              json.dumps({str(k): v for k, v in observed_prices.items()}) if observed_prices else None,
              utc_now_iso()),
         )
@@ -547,14 +597,23 @@ def add_milling_experiment(conn: sqlite3.Connection, herb_item_id: int, herbs_us
     return experiment_id
 
 
-def list_milling_experiments(conn: sqlite3.Connection,
-                             herb_item_id: Optional[int] = None) -> list:
-    """Experiments (newest first) as dicts, each with an ``outputs`` list."""
+def list_experiments(conn: sqlite3.Connection, process: Optional[str] = "milling",
+                     input_item_id: Optional[int] = None) -> list:
+    """Experiments (newest first) as dicts, each with an ``outputs`` list.
+
+    ``process=None`` returns every process. The input item is in ``herb_item_id`` /
+    ``herb_name`` / ``herbs_used`` (original column names, also used for ore).
+    """
+    clauses, params = [], []
+    if process is not None:
+        clauses.append("process = ?")
+        params.append(_check_process(process))
+    if input_item_id is not None:
+        clauses.append("herb_item_id = ?")
+        params.append(int(input_item_id))
     query = "SELECT * FROM milling_experiments"
-    params: tuple = ()
-    if herb_item_id is not None:
-        query += " WHERE herb_item_id = ?"
-        params = (int(herb_item_id),)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
     experiments = [dict(r) for r in conn.execute(query + " ORDER BY id DESC", params)]
     for exp in experiments:
         exp["outputs"] = [dict(r) for r in conn.execute(
@@ -565,19 +624,46 @@ def list_milling_experiments(conn: sqlite3.Connection,
     return experiments
 
 
-def delete_milling_experiment(conn: sqlite3.Connection, experiment_id: int) -> None:
+def delete_experiment(conn: sqlite3.Connection, experiment_id: int) -> None:
     with conn:
         conn.execute("DELETE FROM milling_experiments WHERE id = ?", (int(experiment_id),))
 
 
-def list_milling_herbs(conn: sqlite3.Connection) -> pd.DataFrame:
-    """Herbs that have experiments, with counts."""
+def list_experiment_inputs(conn: sqlite3.Connection, process: str = "milling") -> pd.DataFrame:
+    """Input items (herbs / ores) that have experiments, with counts."""
     return pd.read_sql_query(
         """SELECT herb_item_id, MAX(herb_name) AS herb_name,
                   COUNT(*) AS experiments, SUM(herbs_used) AS total_herbs
-           FROM milling_experiments GROUP BY herb_item_id ORDER BY herb_name""",
-        conn,
+           FROM milling_experiments WHERE process = ?
+           GROUP BY herb_item_id ORDER BY herb_name""",
+        conn, params=(_check_process(process),),
     )
+
+
+# Milling-named wrappers (the original Stage 2 API).
+
+def add_milling_experiment(conn: sqlite3.Connection, herb_item_id: int, herbs_used: int,
+                           outputs: list, herb_name: Optional[str] = None,
+                           performed_at: Optional[str] = None, notes: str = "",
+                           herb_cost_each_copper: Optional[int] = None,
+                           observed_prices: Optional[dict] = None) -> int:
+    if herbs_used is None or herbs_used <= 0:
+        raise ValueError("Herbs used must be greater than zero.")
+    return add_experiment(conn, "milling", herb_item_id, herbs_used, outputs, herb_name,
+                          performed_at, notes, herb_cost_each_copper, observed_prices)
+
+
+def list_milling_experiments(conn: sqlite3.Connection,
+                             herb_item_id: Optional[int] = None) -> list:
+    return list_experiments(conn, "milling", herb_item_id)
+
+
+def delete_milling_experiment(conn: sqlite3.Connection, experiment_id: int) -> None:
+    delete_experiment(conn, experiment_id)
+
+
+def list_milling_herbs(conn: sqlite3.Connection) -> pd.DataFrame:
+    return list_experiment_inputs(conn, "milling")
 
 
 # --- Recipes -------------------------------------------------------------------------------
@@ -667,3 +753,31 @@ def list_item_resources(conn: sqlite3.Connection) -> pd.DataFrame:
 def delete_item_resource(conn: sqlite3.Connection, item_id: int) -> None:
     with conn:
         conn.execute("DELETE FROM item_resources WHERE item_id = ?", (int(item_id),))
+
+
+# --- Recipe output quality tiers ------------------------------------------------------------------
+
+def save_output_tiers(conn: sqlite3.Connection, recipe_key: str, tiers: list) -> None:
+    """Replace a recipe's quality tiers. ``tiers`` = [{"tier_label", "item_id", "item_name"}]."""
+    row = conn.execute("SELECT id FROM recipes WHERE recipe_key = ?", (recipe_key,)).fetchone()
+    if row is None:
+        raise ValueError(f"No recipe with key '{recipe_key}'.")
+    labels = [str(t["tier_label"]).strip() for t in tiers]
+    if any(not label for label in labels):
+        raise ValueError("Every quality tier needs a label (e.g. 'Silver').")
+    if len(set(labels)) != len(labels):
+        raise ValueError("Quality tier labels must be unique within a recipe.")
+    with conn:
+        conn.execute("DELETE FROM recipe_output_tiers WHERE recipe_id = ?", (row["id"],))
+        conn.executemany(
+            "INSERT INTO recipe_output_tiers (recipe_id, tier_label, item_id, item_name, sort_order) "
+            "VALUES (?,?,?,?,?)",
+            [(row["id"], label, int(t["item_id"]), t.get("item_name"), n)
+             for n, (label, t) in enumerate(zip(labels, tiers))])
+
+
+def list_output_tiers(conn: sqlite3.Connection, recipe_key: str) -> list:
+    return [dict(r) for r in conn.execute(
+        """SELECT t.tier_label, t.item_id, t.item_name FROM recipe_output_tiers t
+           JOIN recipes r ON r.id = t.recipe_id WHERE r.recipe_key = ? ORDER BY t.sort_order""",
+        (recipe_key,))]

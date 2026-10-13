@@ -28,6 +28,12 @@ MANUAL_STAT_FIELDS = {
     "resourcefulness_pct": "Resourcefulness %",
     "ingenuity_pct": "Ingenuity %",
 }
+# Measured sizes of the Resourcefulness / Multicraft effects. Optional: they are only
+# needed to model those effects, so they are not listed as "missing" stats.
+MECHANIC_SIZE_FIELDS = {
+    "resourcefulness_saved_pct": "Resourcefulness: share of eligible reagents saved %",
+    "multicraft_extra_pct": "Multicraft: extra output % of base",
+}
 SNAPSHOT_STALE_DAYS = 7
 
 
@@ -47,6 +53,8 @@ class ProfessionProfile:
     multicraft_pct: Optional[float] = None
     resourcefulness_pct: Optional[float] = None
     ingenuity_pct: Optional[float] = None
+    resourcefulness_saved_pct: Optional[float] = None
+    multicraft_extra_pct: Optional[float] = None
     notes: str = ""
     stats_updated_at: Optional[datetime] = None
     missing_stats: tuple = field(default_factory=tuple)
@@ -76,6 +84,7 @@ def load_profile(conn, character_key: str, profession: str) -> Optional[Professi
         return None
     stats = database.get_profession_stats(conn, character_key, profession) or {}
     values = {name: _clean(stats.get(name)) for name in MANUAL_STAT_FIELDS}
+    sizes = {name: _clean(stats.get(name)) for name in MECHANIC_SIZE_FIELDS}
     return ProfessionProfile(
         character_key=character_key,
         profession=profession,
@@ -88,14 +97,22 @@ def load_profile(conn, character_key: str, profession: str) -> Optional[Professi
         notes=stats.get("notes") or "",
         stats_updated_at=_dt(stats.get("updated_at")),
         missing_stats=tuple(MANUAL_STAT_FIELDS[n] for n, v in values.items() if v is None),
-        **values,
+        **values, **sizes,
     )
 
 
-def list_profile_choices(conn) -> list:
-    """(character_key, profession) pairs available for selection."""
+def list_profile_choices(conn, profession: Optional[str] = None) -> list:
+    """(character_key, profession) pairs available for selection.
+
+    ``profession`` filters case-insensitively by substring, so "Alchemy" also finds
+    a profession exported as e.g. "Khaz Algar Alchemy". Names follow the game client's language.
+    """
     df = database.list_character_professions(conn)
-    return list(zip(df["character_key"], df["profession"]))
+    pairs = list(zip(df["character_key"], df["profession"]))
+    if profession:
+        wanted = profession.lower()
+        pairs = [(c, p) for c, p in pairs if wanted in str(p).lower()]
+    return pairs
 
 
 def profile_warnings(profile: ProfessionProfile, now: Optional[datetime] = None) -> list:
