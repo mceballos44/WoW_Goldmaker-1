@@ -137,6 +137,45 @@ revenue is linear in quantity (selling more does not move the price); unsold out
 worth 0. The liquidity check compares expected units with TSM's `soldPerDay` and warns above
 one day of volume - a rule of thumb, and `soldPerDay` may be missing from some files.
 
+## Recipes, crafting and housing (Stage 3)
+
+The **Housing / Crafting** tab has four parts:
+
+* **Compare recipes** - ranks every recipe by profit per craft, ROI, profit at your stock limit or cost, with
+  filters for profession, expansion, patch and category. Flags show unverified recipes, stale prices, missing
+  prices and free reagents that were assumed.
+* **Calculator** - one recipe in detail: cost, profit, ROI, break-even output price, profit for 1 / 10 / 100 /
+  your own number of crafts, a reagent breakdown, stock limits and a TSM demand indicator. Prices are prefilled
+  and editable for that calculation only.
+* **Recipes** - list, edit, import (CSV or JSON, file or paste) and export. Importing a recipe whose key already
+  exists replaces it; recipes with problems are skipped and the problems are listed.
+* **Stock & costs** - units on hand and an optional opportunity cost for items you cannot simply buy.
+
+**No recipe data ships with the app.** I could not verify a current, reliable recipe dataset (including the
+Patch 12.1.5 housing quantities), so every reagent and quantity comes from you. Each recipe records its
+`source`, `game_patch` and `last_verified` date; recipes without a verification date are flagged everywhere.
+The example in `samples/recipes_EXAMPLE.csv` is deliberately fake (item IDs 999000xxx).
+
+Recipe file format - one row per reagent (CSV) or a `reagents` list (JSON):
+`recipe_key, name, crafted_item_id | crafted_item_name, output_quantity, profession, required_skill, expansion,
+game_patch, game_recipe_id, source, last_verified, category, notes, reagent_slot, reagent_item_id | reagent_name,
+reagent_quantity, quality_label, auctionable, savings_eligible`.
+Names are accepted only when they match exactly one item in your cached prices; otherwise use the item ID.
+Reagents sharing a `reagent_slot` are alternatives (for example quality tiers): the calculator uses the cheapest
+priced one unless you pick.
+
+How mechanics are handled (and not):
+* Resourcefulness and Multicraft are **off by default** and modelled as two separate expected-value effects:
+  Resourcefulness = chance x share of *savings-eligible* reagents saved; Multicraft = chance x extra output.
+  Each applies only if you fill in **both** its chance and its size. The app knows neither number - enter
+  values you have measured. They are never added together and no reagent is assumed eligible.
+* Not modelled: Ingenuity, concentration, output quality tiers, skill thresholds, and the price impact of
+  selling many items.
+* A reagent marked `auctionable = false` is priced by your opportunity cost; with none set it counts as free
+  **and the app says so**. Stock limits (`crafts possible`) use your recorded units on hand.
+* Missing prices on auctionable items block the profit calculation; they are never treated as 0.
+* Everything is theoretical margin at today's listed prices, not demonstrated sales.
+
 ## How prices are chosen for an item
 
 1. Manual override, if you set one
@@ -181,8 +220,11 @@ goldmaker/
   wow_files.py          finds CharExporter.lua on disk
   profiles.py           merged profession profiles for calculators
   milling.py            milling profit maths and yield calibration (pure functions)
+  recipes.py            recipe model, validation, CSV/JSON import and export
+  crafting.py           crafting profit maths, mechanics, recipe comparison (pure functions)
 ui_profiles.py          Character Profiles tab
 ui_milling.py           Milling tab
+ui_crafting.py          Housing / Crafting tab
 ui_common.py            shared widgets (item picker)
 open_in_vscode.bat      set up + open this folder in VS Code
 setup_env.bat           create .venv and install dependencies
@@ -199,7 +241,7 @@ data/                   created at runtime: goldmaker.sqlite3 and raw CSV cache
 pytest
 ```
 
-Covers milling maths (including your Felwort batch), yield statistics, experiment storage, the Lua parser, CharExporter parsing (all three formats), snapshot-ordering rules,
+Covers recipes import/validation, crafting maths (including your Gold Sunglass Vial example), milling maths (including your Felwort batch), yield statistics, experiment storage, the Lua parser, CharExporter parsing (all three formats), snapshot-ordering rules,
 manual-stat preservation, profile completeness, currency conversion, URL building, CSV normalisation (including missing
 columns), failed-download handling, price priority, overrides, missing-price
 handling and staleness. Tests use synthetic CSV data, not live TSM files.
@@ -207,6 +249,6 @@ handling and staleness. Tests use synthetic CSV data, not live TSM files.
 ## Roadmap
 
 * Stage 2: milling calculator + experiment tracking - **done**
-* Stage 3: generic crafting recipes + housing calculator (CSV/JSON recipe import)
+* Stage 3: generic crafting recipes + housing calculator (CSV/JSON recipe import) - **done**
 * Stage 4: prospecting, jewelcrafting/alchemy calculators using the saved profiles
 * Stage 5: opportunity scanner, investment scenarios, Excel import/export
