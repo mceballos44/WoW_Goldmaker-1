@@ -1,0 +1,10 @@
+# Streamlit settings for this project (read from the folder you launch from).
+[server]
+# Do not pop open an external browser window; view the app inside VS Code
+# (Simple Browser) or open http://localhost:8501 yourself.
+headless = true
+# Re-run the app automatically whenever you save a project file in VS Code.
+runOnSave = true
+
+[browser]
+gatherUsageStats = false

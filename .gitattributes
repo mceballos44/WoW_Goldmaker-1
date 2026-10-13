@@ -1,0 +1,4 @@
+# Normalise line endings, but keep Windows batch files CRLF and sample data byte-for-byte.
+* text=auto
+*.bat text eol=crlf
+samples/** -text

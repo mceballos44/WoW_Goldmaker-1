@@ -1,0 +1,79 @@
+{
+ "timestamp": 1760000000,
+ "basic": {
+  "name": "Testalch",
+  "realm": "Area 52",
+  "class": "Mage",
+  "spec": "Frost",
+  "level": 90,
+  "race": "Human",
+  "faction": "Alliance"
+ },
+ "professions": [
+  {
+   "name": "Alchemy",
+   "skillLevel": 100,
+   "maxSkillLevel": 100,
+   "concentration": 850,
+   "concentrationMax": 1000,
+   "knowledgePoints": 12,
+   "recipesKnown": 150,
+   "equipment": [
+    {
+     "name": "Test Alchemist's Apron",
+     "ilvl": 250,
+     "slot": "Accessory",
+     "slotID": 20,
+     "link": "|cnIQ4:|Hitem:12345::::::::90:|h[Test Alchemist's Apron]|h|r"
+    }
+   ],
+   "specializations": [
+    {
+     "name": "Potion Mastery",
+     "state": 1,
+     "paths": [
+      {
+       "name": "Potion Mastery",
+       "currentRank": 5,
+       "maxRank": 10,
+       "state": 1,
+       "perks": [
+        {
+         "name": "Test Perk A",
+         "state": 2,
+         "isMajor": false
+        },
+        {
+         "name": "Test Perk B",
+         "state": 0,
+         "isMajor": true
+        }
+       ],
+       "children": [
+        {
+         "name": "Test Child Path",
+         "currentRank": 7,
+         "maxRank": 7,
+         "state": 2,
+         "perks": [],
+         "children": []
+        }
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Herbalism",
+   "skillLevel": 75,
+   "maxSkillLevel": 100,
+   "concentration": 0,
+   "concentrationMax": 0,
+   "knowledgePoints": 0,
+   "recipesKnown": 0,
+   "equipment": [],
+   "specializations": []
+  }
+ ]
+}
