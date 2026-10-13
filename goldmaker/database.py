@@ -122,6 +122,49 @@ CREATE TABLE IF NOT EXISTS milling_experiment_outputs (
     PRIMARY KEY (experiment_id, item_id)
 );
 
+-- Crafting recipes. Contents come only from user imports/edits - nothing is built in.
+CREATE TABLE IF NOT EXISTS recipes (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipe_key         TEXT NOT NULL UNIQUE,
+    name               TEXT NOT NULL,
+    crafted_item_id    INTEGER NOT NULL,
+    crafted_item_name  TEXT,
+    output_quantity    INTEGER NOT NULL DEFAULT 1 CHECK (output_quantity > 0),
+    profession         TEXT,
+    required_skill     INTEGER,
+    expansion          TEXT,
+    game_patch         TEXT,
+    game_recipe_id     INTEGER,
+    source             TEXT,
+    last_verified      TEXT,
+    category           TEXT,
+    notes              TEXT,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS recipe_reagents (
+    recipe_id         INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    slot              INTEGER NOT NULL,      -- reagents sharing a slot are alternatives
+    item_id           INTEGER NOT NULL,
+    item_name         TEXT,
+    quantity          INTEGER NOT NULL CHECK (quantity > 0),
+    quality_label     TEXT,
+    auctionable       INTEGER NOT NULL DEFAULT 1,
+    savings_eligible  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (recipe_id, slot, item_id)
+);
+
+-- Per-item stock and opportunity cost (e.g. non-auctionable reagents).
+CREATE TABLE IF NOT EXISTS item_resources (
+    item_id                  INTEGER PRIMARY KEY,
+    name                     TEXT,
+    on_hand                  INTEGER CHECK (on_hand IS NULL OR on_hand >= 0),
+    opportunity_cost_copper  INTEGER CHECK (opportunity_cost_copper IS NULL OR opportunity_cost_copper >= 0),
+    notes                    TEXT,
+    updated_at               TEXT NOT NULL
+);
+
 -- Stats the user enters by hand. Kept apart from imported data so a re-import
 -- can never overwrite them. NULL means "not entered", never 0.
 CREATE TABLE IF NOT EXISTS profession_stats (
@@ -535,3 +578,92 @@ def list_milling_herbs(conn: sqlite3.Connection) -> pd.DataFrame:
            FROM milling_experiments GROUP BY herb_item_id ORDER BY herb_name""",
         conn,
     )
+
+
+# --- Recipes -------------------------------------------------------------------------------
+
+def save_recipe(conn: sqlite3.Connection, recipe) -> str:
+    """Insert or replace a recipe (matched on ``recipe_key``). Returns ``new`` or ``replaced``.
+
+    ``recipe`` is a ``goldmaker.recipes.Recipe``. Reagents are replaced wholesale.
+    """
+    now = utc_now_iso()
+    existing = conn.execute("SELECT id FROM recipes WHERE recipe_key = ?", (recipe.key,)).fetchone()
+    fields = (recipe.name, recipe.crafted_item_id, recipe.crafted_item_name, recipe.output_quantity,
+              recipe.profession, recipe.required_skill, recipe.expansion, recipe.game_patch,
+              recipe.game_recipe_id, recipe.source, recipe.last_verified, recipe.category, recipe.notes)
+    with conn:
+        if existing is None:
+            cursor = conn.execute(
+                """INSERT INTO recipes (recipe_key, name, crafted_item_id, crafted_item_name,
+                   output_quantity, profession, required_skill, expansion, game_patch,
+                   game_recipe_id, source, last_verified, category, notes, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (recipe.key, *fields, now, now))
+            recipe_id = cursor.lastrowid
+        else:
+            recipe_id = existing["id"]
+            conn.execute(
+                """UPDATE recipes SET name=?, crafted_item_id=?, crafted_item_name=?, output_quantity=?,
+                   profession=?, required_skill=?, expansion=?, game_patch=?, game_recipe_id=?,
+                   source=?, last_verified=?, category=?, notes=?, updated_at=? WHERE id=?""",
+                (*fields, now, recipe_id))
+            conn.execute("DELETE FROM recipe_reagents WHERE recipe_id = ?", (recipe_id,))
+        conn.executemany(
+            """INSERT INTO recipe_reagents (recipe_id, slot, item_id, item_name, quantity,
+               quality_label, auctionable, savings_eligible) VALUES (?,?,?,?,?,?,?,?)""",
+            [(recipe_id, r.slot, r.item_id, r.item_name, r.quantity, r.quality_label,
+              int(r.auctionable), int(r.savings_eligible)) for r in recipe.reagents])
+    return "new" if existing is None else "replaced"
+
+
+def list_recipe_rows(conn: sqlite3.Connection, recipe_key: Optional[str] = None) -> list:
+    """Recipes as dicts (with a ``reagents`` list), ordered by name."""
+    query, params = "SELECT * FROM recipes", ()
+    if recipe_key is not None:
+        query, params = query + " WHERE recipe_key = ?", (recipe_key,)
+    rows = [dict(r) for r in conn.execute(query + " ORDER BY name COLLATE NOCASE, recipe_key", params)]
+    for row in rows:
+        row["reagents"] = [dict(r) for r in conn.execute(
+            "SELECT slot, item_id, item_name, quantity, quality_label, auctionable, savings_eligible "
+            "FROM recipe_reagents WHERE recipe_id = ? ORDER BY slot, item_id", (row["id"],))]
+    return rows
+
+
+def recipe_keys(conn: sqlite3.Connection) -> set:
+    return {r["recipe_key"] for r in conn.execute("SELECT recipe_key FROM recipes")}
+
+
+def delete_recipe(conn: sqlite3.Connection, recipe_key: str) -> None:
+    with conn:
+        conn.execute("DELETE FROM recipes WHERE recipe_key = ?", (recipe_key,))
+
+
+# --- Item resources (stock on hand, opportunity cost) ---------------------------------------
+
+def upsert_item_resource(conn: sqlite3.Connection, item_id: int, name: Optional[str] = None,
+                         on_hand: Optional[int] = None,
+                         opportunity_cost_copper: Optional[int] = None, notes: str = "") -> None:
+    if on_hand is not None and on_hand < 0:
+        raise ValueError("Units on hand cannot be negative.")
+    if opportunity_cost_copper is not None and opportunity_cost_copper < 0:
+        raise ValueError("Opportunity cost cannot be negative.")
+    with conn:
+        conn.execute(
+            """INSERT INTO item_resources (item_id, name, on_hand, opportunity_cost_copper, notes, updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(item_id) DO UPDATE SET
+                 name = COALESCE(excluded.name, item_resources.name),
+                 on_hand = excluded.on_hand,
+                 opportunity_cost_copper = excluded.opportunity_cost_copper,
+                 notes = excluded.notes, updated_at = excluded.updated_at""",
+            (int(item_id), name, on_hand, opportunity_cost_copper, notes, utc_now_iso()))
+
+
+def list_item_resources(conn: sqlite3.Connection) -> pd.DataFrame:
+    return pd.read_sql_query("SELECT * FROM item_resources ORDER BY name COLLATE NOCASE, item_id", conn)
+
+
+def delete_item_resource(conn: sqlite3.Connection, item_id: int) -> None:
+    with conn:
+        conn.execute("DELETE FROM item_resources WHERE item_id = ?", (int(item_id),))

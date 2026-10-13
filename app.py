@@ -4,7 +4,7 @@ Run with:  streamlit run app.py        (or double-click run_app.bat on Windows)
 
 Stage 1: TSM price download + local cache, searchable price table,
 manual price overrides. Also: character profile import from CharExporter and
-Stage 2 (milling calculator + experiments). Other tabs are placeholders.
+Stage 2 (milling) and Stage 3 (recipes, crafting/housing). Other tabs are placeholders.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import pandas as pd
 import streamlit as st
 
 from goldmaker import config, database, pricing, tsm_client
+import ui_crafting
 import ui_milling
 import ui_profiles
 from goldmaker.currency import format_gold, gold_to_copper
@@ -175,8 +176,8 @@ def render_sidebar() -> tuple[str, str, str]:
 def render_dashboard(region: str, realm_slug: str, table: pd.DataFrame) -> None:
     st.header("Dashboard")
     st.info("Installed so far: price download, cache, search, manual overrides, character profile "
-            "import from CharExporter, and the milling calculator. Other calculators and the "
-            "opportunity scanner arrive in later stages.")
+            "import from CharExporter, the milling calculator, and the recipe/housing crafting calculator. "
+            "Prospecting, profession-stat modelling and the opportunity scanner arrive in later stages.")
     rows = dataset_rows(region, realm_slug)
     cols = st.columns(4)
     cols[0].metric("Items with a price", f"{int(table['effective_copper'].notna().sum()):,}" if not table.empty else "0")
@@ -403,9 +404,7 @@ def main() -> None:
         render_placeholder("Alchemy", "Stage 4", [
             "Flasks and potions with reagent/output quality and per-character profiles"])
     with tabs[5]:
-        render_placeholder("Housing / Crafting", "Stage 3", [
-            "Generic recipe database with CSV/JSON import and editable recipes",
-            "Legion and housing decoration profitability"])
+        ui_crafting.render(table)
     with tabs[6]:
         render_placeholder("AH Investment", "Stage 5", [
             "Bearish / baseline / bullish scenarios, break-even resale price"])

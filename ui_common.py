@@ -2,14 +2,30 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
 
-from goldmaker import pricing
+from goldmaker import config, database, pricing
 
 NO_CHOICE = "- pick from search results -"
+
+
+def db():
+    """Short-lived database connection; always use as ``with db() as conn``."""
+    return closing(database.connect())
+
+
+def default_ah_cut_pct() -> float:
+    """AH commission (percent) saved in Settings, else the configured default."""
+    with db() as conn:
+        raw = database.get_setting(conn, "ah_cut_pct", str(config.DEFAULT_AH_CUT_PCT))
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return config.DEFAULT_AH_CUT_PCT
 
 
 def item_picker(table: pd.DataFrame, key: str, label: str = "Item") -> Optional[tuple]:

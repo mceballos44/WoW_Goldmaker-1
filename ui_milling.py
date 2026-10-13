@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from contextlib import closing
 from datetime import date
 from typing import Optional
 
@@ -11,24 +10,11 @@ import streamlit as st
 
 from goldmaker import config, database, milling, pricing
 from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
-from ui_common import item_picker, reliability_badge
+from ui_common import db, default_ah_cut_pct, item_picker, reliability_badge
 
 MODE_CALIBRATED = "Calibrated from my experiments"
 MODE_MANUAL = "Manual yields"
 GOLD_FMT = st.column_config.NumberColumn(format="%.2f")
-
-
-def db():
-    return closing(database.connect())
-
-
-def default_ah_cut_pct() -> float:
-    with db() as conn:
-        raw = database.get_setting(conn, "ah_cut_pct", str(config.DEFAULT_AH_CUT_PCT))
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return config.DEFAULT_AH_CUT_PCT
 
 
 def render(table: pd.DataFrame) -> None:

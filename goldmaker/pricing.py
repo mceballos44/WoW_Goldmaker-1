@@ -121,12 +121,7 @@ class PriceResult:
         return self.copper is None
 
 
-def resolve_price(table: pd.DataFrame, item_id: int) -> PriceResult:
-    """Look up one item. Unknown items and items without a price are 'missing'."""
-    rows = table[table["item_id"] == item_id]
-    if rows.empty:
-        return PriceResult(item_id, None, None, "missing", False, True, None)
-    row = rows.iloc[0]
+def _result_from_row(row: pd.Series, item_id: int) -> PriceResult:
     copper = None if is_missing(row["effective_copper"]) else float(row["effective_copper"])
     is_override = row["effective_source"] == "override"
     updated = row["updated_at"]
@@ -140,6 +135,50 @@ def resolve_price(table: pd.DataFrame, item_id: int) -> PriceResult:
         is_stale=False if is_override else bool(row["tsm_stale"]),
         updated_at=None if is_missing(updated) else updated.to_pydatetime(),
     )
+
+
+def _missing_result(item_id: int) -> PriceResult:
+    return PriceResult(item_id, None, None, "missing", False, True, None)
+
+
+def resolve_price(table: pd.DataFrame, item_id: int) -> PriceResult:
+    """Look up one item. Unknown items and items without a price are 'missing'."""
+    rows = table[table["item_id"] == item_id]
+    if rows.empty:
+        return _missing_result(item_id)
+    return _result_from_row(rows.iloc[0], item_id)
+
+
+class PriceIndex:
+    """Fast repeated lookups against one price table (same answers as ``resolve_price``)."""
+
+    def __init__(self, table: pd.DataFrame):
+        self._table = (table.drop_duplicates("item_id").set_index("item_id", drop=False)
+                       if not table.empty else table)
+
+    def row(self, item_id: int):
+        """The raw table row (Series) for an item, or None."""
+        if self._table.empty or item_id not in self._table.index:
+            return None
+        return self._table.loc[item_id]
+
+    def get(self, item_id: int) -> PriceResult:
+        row = self.row(item_id)
+        return _missing_result(item_id) if row is None else _result_from_row(row, item_id)
+
+    def demand(self, item_id: int) -> tuple:
+        """(sold_per_day, sale_rate) from TSM, each None when not provided."""
+        row = self.row(item_id)
+        if row is None:
+            return None, None
+        def clean(v):
+            return None if is_missing(v) else float(v)
+        return clean(row["sold_per_day"]), clean(row["sale_rate"])
+
+    def lookup_name(self, name: str) -> list:
+        """[(item_id, name)] for every item whose name matches exactly (case-insensitive)."""
+        found = find_by_name(self._table, name) if not self._table.empty else self._table
+        return [(int(i), str(n)) for i, n in zip(found["item_id"], found["name"])] if len(found) else []
 
 
 # --- Display helpers ---------------------------------------------------------------
