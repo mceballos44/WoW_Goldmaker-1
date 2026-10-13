@@ -9,8 +9,16 @@ Owner: Deadwalker2000. The repo is PUBLIC - never commit personal data.
 * Run the full test suite before every commit. All tests use synthetic data (no network).
 
 ## Layout
-* `goldmaker/` - logic, no Streamlit imports. Pure functions where possible (`milling.py`, `crafting.py`).
+* `goldmaker/` - logic, no Streamlit imports. Pure functions where possible (`conversion.py`, `milling.py`,
+  `crafting.py`, `scanner.py`, `investment.py`).
+* Milling and prospecting share `conversion.py` (maths) and `ui_processing.py` (UI). Add a new
+  "input -> outputs" process there (and to `database.PROCESSES`), never by copy-paste.
+* Jewelcrafting / Alchemy reuse `ui_crafting.render_calculator` / `render_compare` with a `prefix` (widget keys
+  must be unique per tab) and a `profession` filter.
 * `app.py`, `ui_*.py` - Streamlit UI only; keep maths out of them.
+* Schema changes: add new columns to `_ADDED_COLUMNS` in `database.py` so existing user databases upgrade
+  in place; never drop or rename columns (the experiments table keeps its `milling_`/`herb_` names).
+* `TODO.md` - open issues, things to verify, ideas. Keep it current with every change.
 * `tests/` - pytest. `samples/` - FAKE example files only.
 * `data/` - runtime SQLite and cached CSVs; git-ignored.
 
@@ -30,5 +38,6 @@ Owner: Deadwalker2000. The repo is PUBLIC - never commit personal data.
 * Changes may arrive as a `git bundle` from a claude.ai chat: `git pull <file>.bundle main`.
 
 ## Roadmap
-Done: Stage 1 (TSM prices/overrides), character import (CharExporter), Stage 2 (milling), Stage 3 (recipes/crafting/housing).
-Next: Stage 4 (prospecting, jewelcrafting/alchemy using saved profiles), Stage 5 (opportunity scanner, AH investment scenarios, Excel import/export).
+Done: Stages 1-5 (prices, character import, milling, recipes/crafting/housing, prospecting + Jewelcrafting/Alchemy
+with profiles and quality tiers, opportunity scanner, AH investment, Excel import/export).
+Next: verify against the user's real data - see `TODO.md`.

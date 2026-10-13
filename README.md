@@ -4,9 +4,24 @@ A local, browser-based World of Warcraft Retail goldmaking dashboard
 (Python + Streamlit + Pandas + SQLite). Nothing is deployed or sent to the cloud;
 the only network access is downloading TradeSkillMaster's public CSV files.
 
-**Current status: Stage 1 of 5, plus character import** - price download, local
-cache, searchable price table, manual price overrides, and importing your alts'
-professions from the CharExporter addon. The other tabs are placeholders.
+**Current status: all 5 stages built** - prices and overrides (1), character import,
+milling (2), recipes and crafting/housing (3), prospecting plus Jewelcrafting / Alchemy with
+character profiles (4), and the opportunity scanner, AH investment scenarios and Excel
+import/export (5). Everything is tested with synthetic data only; nothing has been run against
+real game data yet - see [`TODO.md`](TODO.md) for what still needs checking with you.
+
+| Tab | What it does |
+|---|---|
+| Dashboard | Data freshness and counts |
+| Opportunities | Every recipe and herb/ore with experiments, ranked against current prices |
+| Milling / Prospecting | Calculator, experiment log with calibrated yields, comparison of herbs / ores |
+| Jewelcrafting / Alchemy | Crafting calculator for that profession with your character profiles, quality tiers, break-even material prices |
+| Housing / Crafting | All recipes: compare, calculate, import/export, stock and opportunity costs |
+| AH Investment | Buy now, sell later: bearish / baseline / bullish scenarios |
+| Price Database | Search prices, manual overrides, offline CSV import |
+| Character Profiles | Import alts from CharExporter, type in profession stats |
+| Import / Export | Excel workbook export, import template, import |
+| Settings | Default AH cut, data paths |
 
 ## Working in VS Code (recommended)
 
@@ -64,6 +79,13 @@ streamlit run app.py
    modify the TSM data.
 
 ## Importing your alts (CharExporter)
+
+**Is it automatic?** Mostly. With *Auto-save on Logout* ticked, CharExporter writes each alt into
+its SavedVariables file every time you log out or `/reload` - you do not export anything by hand.
+WoW only lets addons write that one file, and only at logout/reload, so there is no "live" export
+from any addon. The app then reads that file directly (*Read SavedVariables from this PC*): log out
+of each alt once, then press **Find** and **Read file** in the app. Re-importing is safe; older
+snapshots never replace newer ones.
 
 The **Character Profiles** tab reads professions from the free
 [CharExporter](https://www.curseforge.com/wow/addons/charexporter) addon
@@ -169,12 +191,83 @@ How mechanics are handled (and not):
   Resourcefulness = chance x share of *savings-eligible* reagents saved; Multicraft = chance x extra output.
   Each applies only if you fill in **both** its chance and its size. The app knows neither number - enter
   values you have measured. They are never added together and no reagent is assumed eligible.
-* Not modelled: Ingenuity, concentration, output quality tiers, skill thresholds, and the price impact of
-  selling many items.
+* Not modelled: Ingenuity, concentration, skill thresholds, and the price impact of
+  selling many items. Output quality tiers and break-even material prices: see Stage 4 (they work on
+  this tab too).
 * A reagent marked `auctionable = false` is priced by your opportunity cost; with none set it counts as free
   **and the app says so**. Stock limits (`crafts possible`) use your recorded units on hand.
 * Missing prices on auctionable items block the profit calculation; they are never treated as 0.
 * Everything is theoretical margin at today's listed prices, not demonstrated sales.
+
+## Prospecting (Stage 4)
+
+*Prospecting* works exactly like Milling, for ore: a **Calculator** (profit, ROI, cost, the maximum ore
+price for your target ROI, per-output breakdown, liquidity check), an **Experiments** log and
+**Compare ore**, which ranks every ore that has experiments at current prices (for example Copper Ore vs
+Silver Ore - by the item IDs in your data, never by similar names).
+
+* Yields come only from your recorded batches; no gem distributions are built in. Record every output
+  (each gem quality, crystal glass, anything else) as its own item.
+* *Other cost per ore* covers a prospecting reagent or anything else you pay per ore (default 0).
+* *Ore per prospect* is optional and only used for the "per prospect" figures - the app does not
+  assume a number; check it in game.
+* Profession talents that change yields are not modelled; they show up in your experiments.
+
+Milling and prospecting share one module (`goldmaker/conversion.py`), so both behave identically.
+Your existing milling experiments are kept (the database is upgraded in place the first time you
+start this version).
+
+## Jewelcrafting and Alchemy (Stage 4)
+
+These tabs show the crafting calculator for one profession: recipes whose *profession* contains
+"Jewelcrafting" / "Alchemy" (set it when you import or edit recipes). On top of Stage 3 they add:
+
+* **Character profile** - pick an alt; its saved Resourcefulness % and Multicraft % prefill the
+  mechanics. Each effect also needs its measured **size** (share of reagents saved per proc / extra
+  output per proc), entered on *Character Profiles -> Profession stats*. Without a size the effect
+  stays off and the app says so. Effects are never added together.
+* **Skill vs recipe** - your crafting skill next to the recipe's required skill. Quality from skill vs
+  difficulty is *not* modelled.
+* **Break-even material prices** - for each reagent, the most you can pay (others at current prices)
+  before the craft stops breaking even. Works even if that reagent has no price yet (e.g. an expensive
+  herb), and includes expected Resourcefulness savings for savings-eligible reagents.
+* **Output quality tiers** - each quality (silver, gold, ...) is its own item ID. You get profit per
+  craft *if every craft lands in that tier* (is silver profitable? is gold?), the break-even price, and an
+  expected profit only from **your own** odds of each tier (they must add up to 100%).
+* **Profiles** sub-tab - every alt with that profession and which stats are still missing.
+
+Not modelled: Ingenuity, concentration, skill thresholds, price impact.
+
+## Opportunities (Stage 5)
+
+Ranks every recipe and every herb/ore with experiments by profit per operation, ROI, profit per hour,
+lowest investment or fastest to sell. Each row says what one *operation* is (one craft, or N herbs /
+ore once you set the mill / prospect size). Gold per hour only appears once you enter how long an
+operation takes. Flags show stale prices, unverified recipes, small-sample yields, missing prices and
+assumed-free reagents; *days of daily volume* compares your planned output with TSM's sold-per-day.
+Everything is a theoretical margin at listed prices - listed inventory is never assumed to sell.
+
+## AH Investment (Stage 5)
+
+Buy now, sell later. Enter the current price (prefilled if you pick an item), quantity, other costs
+(lost deposits, re-listing), AH cut, your expected future price and sell-through. You get investment
+cost, gross / net revenue, profit, ROI and break-even resale price for bearish / baseline / bullish
+scenarios (spread is your choice; each scenario is editable). One click downloads the scenarios as an
+Excel sheet with live formulas.
+
+## Excel import / export (Stage 5)
+
+*Import / Export -> Build export* writes one workbook: Info (time, region/realm, price basis, AH cut, TSM
+data times, assumptions), price snapshot, manual prices, recipes, material breakdown, crafting
+profitability, experiments, calibrated yields, the latest Opportunities scan, and investment scenarios.
+Profit columns are formulas; missing prices stay blank (never 0).
+
+Import reads the sheets **Recipes** (recipe CSV columns), **Prices** (`item_id, name, price_gold, note`
+-> manual overrides) and **Experiments** (`experiment_ref, process, input_item_id, input_name,
+units_used, performed_at, notes, output_item_id, output_name, quantity`; rows sharing an
+`experiment_ref` are one batch, `process` is `milling` or `prospecting`). An exported workbook can be
+edited and imported back; experiments already stored are skipped so nothing is double-counted.
+Download the empty template from the same tab.
 
 ## How prices are chosen for an item
 
@@ -209,29 +302,41 @@ How mechanics are handled (and not):
 
 ```
 app.py                  Streamlit UI (tabs, sidebar)
-goldmaker/
+goldmaker/              logic only - no Streamlit imports
   config.py             paths, URLs, thresholds
   currency.py           copper <-> gold (Decimal-safe), formatting
   tsm_client.py         URL building, download, CSV normalisation, ingest
-  database.py           SQLite: datasets, prices, overrides, settings
+  database.py           SQLite: prices, overrides, settings, characters, experiments, recipes (+ upgrades)
   pricing.py            price resolution, overrides, staleness, display table
   lua_parser.py         safe Lua data parser (SavedVariables), never executes code
   charexporter.py       CharExporter SavedVariables / JSON / CSV parsing
   wow_files.py          finds CharExporter.lua on disk
   profiles.py           merged profession profiles for calculators
-  milling.py            milling profit maths and yield calibration (pure functions)
+  conversion.py         input item -> outputs maths and yield calibration (milling + prospecting)
+  milling.py            herb-named layer over conversion.py
   recipes.py            recipe model, validation, CSV/JSON import and export
-  crafting.py           crafting profit maths, mechanics, recipe comparison (pure functions)
+  crafting.py           crafting profit, mechanics, profiles, quality tiers, break-even material price
+  scanner.py            opportunity scanner (recipes + processing)
+  investment.py         AH investment scenarios
+  excel_io.py           Excel export / template / import
+ui_processing.py        shared Milling / Prospecting UI
+ui_milling.py           Milling tab (+ Felwort quick start)
+ui_prospecting.py       Prospecting tab
+ui_crafting.py          Housing / Crafting tab (calculator reused by Jewelcrafting / Alchemy)
+ui_profession.py        Jewelcrafting and Alchemy tabs
+ui_scanner.py           Opportunities tab
+ui_investment.py        AH Investment tab
+ui_excel.py             Import / Export tab
 ui_profiles.py          Character Profiles tab
-ui_milling.py           Milling tab
-ui_crafting.py          Housing / Crafting tab
-ui_common.py            shared widgets (item picker)
+ui_common.py            shared widgets (item picker, db connection)
+TODO.md                 open issues, things to verify, ideas
+CLAUDE.md               rules and conventions for Claude sessions
 open_in_vscode.bat      set up + open this folder in VS Code
 setup_env.bat           create .venv and install dependencies
 .vscode/ .streamlit/    VS Code settings/tasks/debug configs, Streamlit config
-samples/                synthetic CharExporter files to try the importer
+samples/                synthetic example files (FAKE data)
 tests/                  pytest suite
-data/                   created at runtime: goldmaker.sqlite3 and raw CSV cache
+data/                   created at runtime: goldmaker.sqlite3 and raw CSV cache (git-ignored)
 ```
 
 ## Tests
@@ -241,14 +346,19 @@ data/                   created at runtime: goldmaker.sqlite3 and raw CSV cache
 pytest
 ```
 
-Covers recipes import/validation, crafting maths (including your Gold Sunglass Vial example), milling maths (including your Felwort batch), yield statistics, experiment storage, the Lua parser, CharExporter parsing (all three formats), snapshot-ordering rules,
+Covers the shared conversion maths and prospecting storage, database upgrades from older versions,
+profile-driven mechanics, break-even material prices, quality tiers, investment scenarios, the
+opportunity scanner, Excel export/import round trips, recipes import/validation, crafting maths
+(including your Gold Sunglass Vial example), milling maths (including your Felwort batch), yield statistics, experiment storage, the Lua parser, CharExporter parsing (all three formats), snapshot-ordering rules,
 manual-stat preservation, profile completeness, currency conversion, URL building, CSV normalisation (including missing
 columns), failed-download handling, price priority, overrides, missing-price
 handling and staleness. Tests use synthetic CSV data, not live TSM files.
 
 ## Roadmap
 
+* Stage 1: TSM prices, cache, overrides - **done**
 * Stage 2: milling calculator + experiment tracking - **done**
 * Stage 3: generic crafting recipes + housing calculator (CSV/JSON recipe import) - **done**
-* Stage 4: prospecting, jewelcrafting/alchemy calculators using the saved profiles
-* Stage 5: opportunity scanner, investment scenarios, Excel import/export
+* Stage 4: prospecting, Jewelcrafting / Alchemy with character profiles and quality tiers - **done**
+* Stage 5: opportunity scanner, AH investment scenarios, Excel import/export - **done**
+* Next: verify everything against real data with you - see [`TODO.md`](TODO.md)
