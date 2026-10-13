@@ -80,12 +80,14 @@ streamlit run app.py
 
 ## Importing your alts (CharExporter)
 
-**Is it automatic?** Mostly. With *Auto-save on Logout* ticked, CharExporter writes each alt into
-its SavedVariables file every time you log out or `/reload` - you do not export anything by hand.
-WoW only lets addons write that one file, and only at logout/reload, so there is no "live" export
-from any addon. The app then reads that file directly (*Read SavedVariables from this PC*): log out
-of each alt once, then press **Find** and **Read file** in the app. Re-importing is safe; older
-snapshots never replace newer ones.
+**It is automatic.** With *Auto-save on Logout* ticked, CharExporter writes every alt into its
+SavedVariables file each time you log out or `/reload` (WoW only lets addons write that one file, and
+only then). Every time the app starts or refreshes it checks that file's last-written time and, when it
+changed, imports the new snapshots - a note appears in the sidebar. So: log out of an alt, then refresh
+the app page. The app looks in the WoW folder you saved once (*Find CharExporter.lua*), otherwise in the
+usual install folders. Rules: older snapshots never replace newer ones, your typed-in stats are never
+touched, nothing is ever written to the WoW folder. Turn it off or force a re-read with *Check now* at the
+top of *Character Profiles -> Import from CharExporter*.
 
 The **Character Profiles** tab reads professions from the free
 [CharExporter](https://www.curseforge.com/wow/addons/charexporter) addon
@@ -212,6 +214,11 @@ Silver Ore - by the item IDs in your data, never by similar names).
 * *Ore per prospect* is optional and only used for the "per prospect" figures - the app does not
   assume a number; check it in game.
 * Profession talents that change yields are not modelled; they show up in your experiments.
+* **Reference yields** (Milling and Prospecting each have a sub-tab): with no experiments yet, type in what
+  a site such as Wowhead shows - per output, the chance per mill / prospect and the average quantity, plus
+  how many herbs / ore one operation uses and the source. They are stored apart from your experiments,
+  never pooled with them, and every result using them says "reference data - not your experiments".
+  Once an item has your own experiments, those are used instead (Opportunities, comparisons).
 
 Milling and prospecting share one module (`goldmaker/conversion.py`), so both behave identically.
 Your existing milling experiments are kept (the database is upgraded in place the first time you
@@ -312,7 +319,8 @@ goldmaker/              logic only - no Streamlit imports
   charexporter.py       CharExporter SavedVariables / JSON / CSV parsing
   wow_files.py          finds CharExporter.lua on disk
   profiles.py           merged profession profiles for calculators
-  conversion.py         input item -> outputs maths and yield calibration (milling + prospecting)
+  conversion.py         input item -> outputs maths, yield calibration, reference yields
+  auto_import.py        automatic CharExporter import (runs on every app start / refresh)
   milling.py            herb-named layer over conversion.py
   recipes.py            recipe model, validation, CSV/JSON import and export
   crafting.py           crafting profit, mechanics, profiles, quality tiers, break-even material price

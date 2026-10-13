@@ -36,6 +36,12 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 ## Ideas / not built yet
 
+- [ ] **Blizzard Game Data API recipe import** (user is creating a client at develop.battle.net). Plan: client
+      ID / secret entered in Settings and stored only in `data/` (git-ignored); import recipes per profession /
+      skill tier with reagents and quantities, recording source = "Blizzard API" and the date. Check what the
+      API gives for quality-tier item IDs and housing recipes before relying on it.
+- [ ] Optional: Blizzard Profile API for alts' professions (no Multicraft / Resourcefulness there).
+
 - [ ] Remember quality-tier odds per profile + recipe (today they are typed per calculation).
 - [ ] Save investment scenarios in the database (today: Excel download only).
 - [ ] Ingenuity and concentration modelling - only once you have measured how they behave.
@@ -45,6 +51,11 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 - [ ] Dashboard charts across calculators (today each calculator has its own charts).
 
 ## Done
+
+- [x] 2026-10-13 Automatic character import: CharExporter.lua is checked on every app run and imported when
+      WoW rewrote it (logout / reload). Same safety rules as manual import.
+- [x] 2026-10-13 Reference yields (e.g. Wowhead) for milling / prospecting, stored apart from experiments and
+      always labelled. Wowhead is not scraped (no public API; scraping is fragile and likely against its terms).
 
 - [x] 2026-10-13 Stage 5: opportunity scanner, AH investment scenarios, Excel export/import/template.
 - [x] 2026-10-13 Stage 4: prospecting (shared `conversion.py` with milling - Felwort regression unchanged),
@@ -56,6 +67,6 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 - **Does CharExporter export automatically?** Yes, with *Auto-save on Logout* ticked it writes every alt to
   its SavedVariables file on each logout or `/reload`. WoW lets addons write only that file and only at
-  logout/reload, so no addon can export "live". The app reads the file directly
-  (*Character Profiles -> Read SavedVariables from this PC*). No addon found exports Multicraft /
+  logout/reload, so no addon can export "live". The app now imports that file automatically whenever it
+  changed (checked each time the app runs or refreshes). No addon found exports Multicraft /
   Resourcefulness / Ingenuity - type those in.

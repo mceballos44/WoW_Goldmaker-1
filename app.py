@@ -394,6 +394,7 @@ def render_settings() -> None:
 def main() -> None:
     init_state()
     region, realm_slug, basis = render_sidebar()
+    ui_profiles.run_auto_import()
 
     with db() as conn:
         version = database.data_version(conn)

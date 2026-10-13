@@ -18,6 +18,10 @@ Owner: Deadwalker2000. The repo is PUBLIC - never commit personal data.
 * `app.py`, `ui_*.py` - Streamlit UI only; keep maths out of them.
 * Schema changes: add new columns to `_ADDED_COLUMNS` in `database.py` so existing user databases upgrade
   in place; never drop or rename columns (the experiments table keeps its `milling_`/`herb_` names).
+* Reference yields (outside data such as Wowhead) live in `reference_yields`, never in the experiment tables,
+  and keep reliability `reference` so every result says so. Do not scrape Wowhead.
+* Character auto-import (`goldmaker/auto_import.py`) runs on every app run; it must stay read-only on the WoW
+  folder and keep the snapshot-ordering rules.
 * `TODO.md` - open issues, things to verify, ideas. Keep it current with every change.
 * `tests/` - pytest. `samples/` - FAKE example files only.
 * `data/` - runtime SQLite and cached CSVs; git-ignored.

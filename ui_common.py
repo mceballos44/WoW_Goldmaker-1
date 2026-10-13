@@ -55,4 +55,5 @@ def item_picker(table: pd.DataFrame, key: str, label: str = "Item") -> Optional[
 
 def reliability_badge(reliability: str) -> str:
     return {"none": "no data", "single batch": "single batch - no uncertainty",
-            "low": "low", "moderate": "moderate"}.get(reliability, reliability)
+            "low": "low", "moderate": "moderate",
+            "reference": "reference data - not your experiments"}.get(reliability, reliability)

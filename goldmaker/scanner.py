@@ -79,7 +79,7 @@ def from_conversion(process: str, input_item_id: int, input_name: Optional[str],
     ``price_of(item_id)``  -> ``pricing.PriceResult``
     ``demand_of(item_id)`` -> ``(sold_per_day, sale_rate)``
     """
-    if summary.n_experiments == 0:
+    if not summary.estimates:
         return None
     per_op = units_per_operation or 1
     looked_up = {i: price_of(i) for i in {input_item_id, *summary.yields()}}
@@ -93,7 +93,9 @@ def from_conversion(process: str, input_item_id: int, input_name: Optional[str],
     flags = []
     if result.missing_prices:
         flags.append("no price: " + ", ".join(result.missing_prices))
-    if summary.reliability in SMALL_SAMPLE:
+    if summary.reliability == conversion.REFERENCE:
+        flags.append("reference yields (outside data, not your experiments)")
+    elif summary.reliability in SMALL_SAMPLE:
         flags.append(f"small sample ({summary.n_experiments} experiment(s), "
                      f"{summary.total_units} units)")
     stale = [p.name or str(i) for i, p in looked_up.items()

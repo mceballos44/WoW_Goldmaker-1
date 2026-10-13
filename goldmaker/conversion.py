@@ -158,6 +158,45 @@ def estimate_yields(batches: list, wording: Wording = Wording()) -> YieldSummary
     return YieldSummary(k, total_units, tuple(estimates), reliability, tuple(warnings))
 
 
+# --- Reference yields (outside sources such as Wowhead) -----------------------------------
+
+REFERENCE = "reference"
+
+
+def yield_from_drop(chance_pct: float, avg_quantity: float, units_per_operation: int) -> float:
+    """Expected output per INPUT UNIT from "chance per operation" style data.
+
+    Sites usually list, per mill / prospect, the chance an item appears and how many you
+    get when it does. With ``units_per_operation`` inputs used per operation:
+    yield per unit = chance x average quantity / units per operation.
+    """
+    if chance_pct is None or avg_quantity is None or units_per_operation is None:
+        raise ValueError("Chance, average quantity and units per operation are all needed.")
+    if not 0 <= chance_pct <= 100:
+        raise ValueError("Chance must be between 0 and 100%.")
+    if avg_quantity < 0:
+        raise ValueError("Average quantity cannot be negative.")
+    if units_per_operation <= 0:
+        raise ValueError("Units per operation must be at least 1.")
+    return chance_pct / 100 * avg_quantity / units_per_operation
+
+
+def reference_summary(rows: list) -> YieldSummary:
+    """A ``YieldSummary`` from stored reference yields (``database.list_reference_yields`` rows).
+
+    It has no experiments, no uncertainty, and reliability ``reference`` so it is always
+    labelled as outside data.
+    """
+    if not rows:
+        return YieldSummary(0, 0, (), "none", ("No reference yields saved.",))
+    sources = sorted({r["source"] for r in rows})
+    estimates = tuple(YieldEstimate(r["output_item_id"], r.get("output_name"), 0, r["yield_per_unit"],
+                                    None, None, None) for r in rows)
+    warning = ("Reference yields from " + "; ".join(sources) + " - outside data, not your own experiments. "
+               "Record your own batches to replace them.")
+    return YieldSummary(0, 0, estimates, REFERENCE, (warning,))
+
+
 # --- Profit calculation -----------------------------------------------------------------
 
 @dataclass(frozen=True)

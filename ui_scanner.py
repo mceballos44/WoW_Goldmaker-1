@@ -65,12 +65,19 @@ def collect(table: pd.DataFrame, ah_cut: float, sell_through: float, operations:
     with db() as conn:
         for process in database.PROCESSES:
             experiments = database.list_experiments(conn, process)
+            seconds, size = settings[process]
+            summaries = {}
             for r in database.list_experiment_inputs(conn, process).itertuples():
                 batches = [conversion.Batch.from_row(e) for e in experiments if e["herb_item_id"] == r.herb_item_id]
-                seconds, size = settings[process]
+                summaries[int(r.herb_item_id)] = (r.herb_name, conversion.estimate_yields(batches))
+            for r in database.list_reference_inputs(conn, process).itertuples():
+                if int(r.input_item_id) not in summaries:          # own experiments always win
+                    rows = database.list_reference_yields(conn, process, int(r.input_item_id))
+                    summaries[int(r.input_item_id)] = (r.input_name, conversion.reference_summary(rows))
+            for input_id, (name, summary) in summaries.items():
                 opp = scanner.from_conversion(
-                    process, int(r.herb_item_id), r.herb_name, conversion.estimate_yields(batches), index.get,
-                    index.demand, operations, None if size is None else int(size), seconds, ah_cut, sell_through)
+                    process, input_id, name, summary, index.get, index.demand, operations,
+                    None if size is None else int(size), seconds, ah_cut, sell_through)
                 if opp is not None:
                     found.append(opp)
     return found
@@ -93,14 +100,15 @@ def render(table: pd.DataFrame) -> None:
     f1, f2, f3 = st.columns(3)
     kinds = f1.multiselect("Kinds", KINDS, default=list(KINDS), key="scan_kinds")
     only_priced = f2.checkbox("Only fully priced", value=True, key="scan_priced")
-    hide_small = f3.checkbox("Hide small-sample yields", value=False, key="scan_small")
+    hide_small = f3.checkbox("Hide small-sample and reference yields", value=False, key="scan_small")
 
     opportunities = [o for o in collect(table, ah_cut / 100, sell / 100, operations, settings) if o.kind in kinds]
     st.session_state["scan_last"] = opportunities          # reused by the Excel export
     if only_priced:
         opportunities = [o for o in opportunities if o.complete]
     if hide_small:
-        opportunities = [o for o in opportunities if o.reliability not in scanner.SMALL_SAMPLE]
+        opportunities = [o for o in opportunities
+                         if o.reliability not in scanner.SMALL_SAMPLE + (conversion.REFERENCE,)]
     if not opportunities:
         st.info("Nothing to show. Add recipes (Housing / Crafting) or record milling / prospecting experiments.")
         return

@@ -183,6 +183,23 @@ CREATE TABLE IF NOT EXISTS profession_stats (
     PRIMARY KEY (character_key, profession)
 );
 
+-- Reference yields typed in from an outside source (e.g. Wowhead community data). Kept apart
+-- from experiments so they are never pooled with the user's own measurements.
+CREATE TABLE IF NOT EXISTS reference_yields (
+    process              TEXT NOT NULL,
+    input_item_id        INTEGER NOT NULL,
+    input_name           TEXT,
+    output_item_id       INTEGER NOT NULL,
+    output_name          TEXT,
+    chance_pct           REAL NOT NULL CHECK (chance_pct >= 0 AND chance_pct <= 100),
+    avg_quantity         REAL NOT NULL CHECK (avg_quantity >= 0),
+    units_per_operation  INTEGER NOT NULL CHECK (units_per_operation > 0),
+    yield_per_unit       REAL NOT NULL,
+    source               TEXT NOT NULL,
+    recorded_at          TEXT NOT NULL,
+    PRIMARY KEY (process, input_item_id, output_item_id)
+);
+
 -- Output quality tiers of a recipe: each tier is its own item ID (e.g. silver / gold quality).
 CREATE TABLE IF NOT EXISTS recipe_output_tiers (
     recipe_id   INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
@@ -781,3 +798,57 @@ def list_output_tiers(conn: sqlite3.Connection, recipe_key: str) -> list:
         """SELECT t.tier_label, t.item_id, t.item_name FROM recipe_output_tiers t
            JOIN recipes r ON r.id = t.recipe_id WHERE r.recipe_key = ? ORDER BY t.sort_order""",
         (recipe_key,))]
+
+
+# --- Reference yields (outside sources, never pooled with experiments) -------------------------------
+
+def save_reference_yields(conn: sqlite3.Connection, process: str, input_item_id: int,
+                          input_name: Optional[str], rows: list, source: str) -> None:
+    """Replace the reference yields of one input item.
+
+    ``rows`` = [{"item_id", "name", "chance_pct", "avg_quantity", "units_per_operation"}].
+    The yield per input unit is chance x average quantity / units per operation.
+    """
+    from .conversion import yield_from_drop
+    _check_process(process)
+    if not (source or "").strip():
+        raise ValueError("Say where these numbers come from (e.g. 'Wowhead, 2026-10-13').")
+    ids = [int(r["item_id"]) for r in rows]
+    if len(set(ids)) != len(ids):
+        raise ValueError("Each output item can appear only once.")
+    values = []
+    now = utc_now_iso()
+    for r in rows:
+        per_unit = yield_from_drop(r["chance_pct"], r["avg_quantity"], r["units_per_operation"])
+        values.append((process, int(input_item_id), input_name, int(r["item_id"]), r.get("name"),
+                       float(r["chance_pct"]), float(r["avg_quantity"]), int(r["units_per_operation"]),
+                       per_unit, source.strip(), now))
+    with conn:
+        conn.execute("DELETE FROM reference_yields WHERE process = ? AND input_item_id = ?",
+                     (process, int(input_item_id)))
+        conn.executemany(
+            """INSERT INTO reference_yields (process, input_item_id, input_name, output_item_id, output_name,
+               chance_pct, avg_quantity, units_per_operation, yield_per_unit, source, recorded_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""", values)
+
+
+def list_reference_yields(conn: sqlite3.Connection, process: str,
+                          input_item_id: Optional[int] = None) -> list:
+    query, params = "SELECT * FROM reference_yields WHERE process = ?", [_check_process(process)]
+    if input_item_id is not None:
+        query, params = query + " AND input_item_id = ?", params + [int(input_item_id)]
+    return [dict(r) for r in conn.execute(query + " ORDER BY input_item_id, output_item_id", params)]
+
+
+def list_reference_inputs(conn: sqlite3.Connection, process: str) -> pd.DataFrame:
+    return pd.read_sql_query(
+        """SELECT input_item_id, MAX(input_name) AS input_name, COUNT(*) AS outputs, MAX(source) AS source,
+                  MAX(recorded_at) AS recorded_at
+           FROM reference_yields WHERE process = ? GROUP BY input_item_id ORDER BY input_name""",
+        conn, params=(_check_process(process),))
+
+
+def delete_reference_yields(conn: sqlite3.Connection, process: str, input_item_id: int) -> None:
+    with conn:
+        conn.execute("DELETE FROM reference_yields WHERE process = ? AND input_item_id = ?",
+                     (_check_process(process), int(input_item_id)))

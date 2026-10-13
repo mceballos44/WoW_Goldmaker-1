@@ -19,6 +19,7 @@ from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
 from ui_common import db, default_ah_cut_pct, item_picker, reliability_badge
 
 MODE_CALIBRATED = "Calibrated from my experiments"
+MODE_REFERENCE = "Reference yields (outside data)"
 MODE_MANUAL = "Manual yields"
 GOLD_FMT = st.column_config.NumberColumn(format="%.2f")
 
@@ -50,11 +51,14 @@ def render(spec: ProcessSpec, table: pd.DataFrame) -> None:
     st.header(spec.title)
     st.caption("Expected yields come only from experiments you record (or numbers you type). "
                "No drop rates are built into this app.")
-    tab_calc, tab_exp, tab_cmp = st.tabs(["Calculator", "Experiments", f"Compare {spec.units}"])
+    tab_calc, tab_exp, tab_ref, tab_cmp = st.tabs(
+        ["Calculator", "Experiments", "Reference yields (e.g. Wowhead)", f"Compare {spec.units}"])
     with tab_calc:
         render_calculator(spec, table)
     with tab_exp:
         render_experiments(spec, table)
+    with tab_ref:
+        render_reference(spec, table)
     with tab_cmp:
         render_compare(spec, table)
 
@@ -69,21 +73,40 @@ def _summary(spec: ProcessSpec, input_id: int, experiments: Optional[list] = Non
 
 # --- Calculator -------------------------------------------------------------------------------
 
+def _known_inputs(spec: ProcessSpec) -> pd.DataFrame:
+    """Input items with experiments, plus those that only have reference yields (experiments = 0)."""
+    with db() as conn:
+        inputs = database.list_experiment_inputs(conn, spec.process)
+        refs = database.list_reference_inputs(conn, spec.process)
+    extra = refs[~refs["input_item_id"].isin(inputs["herb_item_id"])]
+    if extra.empty:
+        return inputs
+    extra = pd.DataFrame({"herb_item_id": extra["input_item_id"], "herb_name": extra["input_name"],
+                          "experiments": 0, "total_herbs": 0})
+    return pd.concat([inputs, extra], ignore_index=True) if not inputs.empty else extra
+
+
+def _reference(spec: ProcessSpec, input_id: int) -> conversion.YieldSummary:
+    with db() as conn:
+        return conversion.reference_summary(database.list_reference_yields(conn, spec.process, input_id))
+
+
 def _choose_input(spec: ProcessSpec, table: pd.DataFrame, inputs: pd.DataFrame) -> Optional[tuple]:
     p = spec.prefix
     options = ["Search all items"]
     if not inputs.empty:
-        options.insert(0, f"{spec.units.title()} with experiments")
+        options.insert(0, f"{spec.units.title()} with experiments or reference yields")
     # The key changes when experiments first exist, so that default takes effect.
     source = st.radio(spec.unit_title, options, horizontal=True,
                       key=f"{p}_src_{'exp' if not inputs.empty else 'none'}")
     if source != "Search all items":
         labels = {
-            f"{r.herb_name or spec.unit_title} ({r.herb_item_id}) - {r.experiments} experiment(s), "
-            f"{int(r.total_herbs)} {spec.units}": (int(r.herb_item_id), r.herb_name)
+            (f"{r.herb_name or spec.unit_title} ({r.herb_item_id}) - "
+             + (f"{r.experiments} experiment(s), {int(r.total_herbs)} {spec.units}" if r.experiments
+                else "reference yields only")): (int(r.herb_item_id), r.herb_name)
             for r in inputs.itertuples()
         }
-        return labels[st.selectbox(f"{spec.unit_title} with experiments", list(labels), key=f"{p}_input_exp")]
+        return labels[st.selectbox(spec.unit_title, list(labels), key=f"{p}_input_exp")]
     return item_picker(table, f"{p}_input", spec.unit_title)
 
 
@@ -94,29 +117,38 @@ def _table_row(table: pd.DataFrame, item_id: int) -> Optional[pd.Series]:
 
 def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
     p = spec.prefix
-    with db() as conn:
-        inputs = database.list_experiment_inputs(conn, spec.process)
-    chosen = _choose_input(spec, table, inputs)
+    chosen = _choose_input(spec, table, _known_inputs(spec))
     if chosen is None:
         st.info(f"Choose a{'n' if spec.unit[0] in 'aeiou' else ''} {spec.unit} above to start.")
         return
     input_id, input_name = chosen
 
-    summary = _summary(spec, input_id)
+    calibrated = _summary(spec, input_id)
+    reference = _reference(spec, input_id)
     input_price = pricing.resolve_price(table, input_id) if not table.empty else None
     label = input_name or (input_price.name if input_price else None) or f"item {input_id}"
 
-    if summary.n_experiments:
+    modes = []
+    if calibrated.n_experiments:
+        modes.append(MODE_CALIBRATED)
+    if reference.estimates:
+        modes.append(MODE_REFERENCE)
+    modes.append(MODE_MANUAL)
+    if not calibrated.n_experiments:
+        st.info(f"No experiments recorded for {label} yet. "
+                + ("Reference yields are available, or enter yields by hand. " if reference.estimates
+                   else "Enter yields by hand below, add reference yields, or ")
+                + "record an experiment on the *Experiments* tab.")
+    mode = st.radio("Yield source", modes, horizontal=True, key=f"{p}_mode_{input_id}_{len(modes)}")
+    summary = reference if mode == MODE_REFERENCE else calibrated
+    if mode == MODE_MANUAL and not calibrated.estimates:
+        summary = reference                       # start manual yields from the reference numbers
+    if mode == MODE_CALIBRATED:
         st.caption(f"**{label}**: {summary.n_experiments} experiment(s), {summary.total_units} {spec.units} "
                    f"{spec.verb_past}. Reliability: **{reliability_badge(summary.reliability)}**.")
+    if mode != MODE_MANUAL:
         for warning in summary.warnings:
             st.warning(warning)
-        modes = [MODE_CALIBRATED, MODE_MANUAL]
-    else:
-        st.info(f"No experiments recorded for {label} yet. Enter yields by hand below, or record "
-                "an experiment on the *Experiments* tab.")
-        modes = [MODE_MANUAL]
-    mode = st.radio("Yield source", modes, horizontal=True, key=f"{p}_mode_{input_id}")
 
     reset = st.session_state.get(f"{p}_reset", 0)
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -192,7 +224,7 @@ def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
     frame = pd.DataFrame(display)
     yield_col = f"Yield per {spec.unit}"
     locked = ["Item ID", "Item", "95% range", "Price source", "Sold / day (TSM)"]
-    if mode == MODE_CALIBRATED:
+    if mode in (MODE_CALIBRATED, MODE_REFERENCE):
         locked.append(yield_col)
     st.markdown("**Outputs** - edit prices (and yields in manual mode); the results update immediately.")
     edited = st.data_editor(
@@ -465,12 +497,13 @@ def render_compare(spec: ProcessSpec, table: pd.DataFrame) -> None:
     p = f"{spec.prefix}_cmp"
     with db() as conn:
         experiments = database.list_experiments(conn, spec.process)
-        inputs = database.list_experiment_inputs(conn, spec.process)
+    inputs = _known_inputs(spec)
     if inputs.empty:
-        st.info(f"Record experiments for at least one {spec.unit} to compare them here. Each {spec.unit} "
-                "is identified by its item ID from your data - never by a similar-looking name.")
+        st.info(f"Record experiments (or reference yields) for at least one {spec.unit} to compare them here. "
+                f"Each {spec.unit} is identified by its item ID from your data - never by a similar-looking name.")
         return
-    st.caption(f"Every {spec.unit} with experiments, at current prices, using its calibrated yields.")
+    st.caption(f"Every {spec.unit} with experiments, at current prices, using its calibrated yields. One with "
+               "only reference yields uses those and says so in the Reliability column.")
     c1, c2, c3 = st.columns(3)
     ah_cut = c1.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key=f"{p}_ahcut")
     sell = c2.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0, key=f"{p}_sell")
@@ -480,6 +513,8 @@ def render_compare(spec: ProcessSpec, table: pd.DataFrame) -> None:
     rows = []
     for r in inputs.itertuples():
         summary = _summary(spec, int(r.herb_item_id), experiments)
+        if not summary.n_experiments:
+            summary = _reference(spec, int(r.herb_item_id))
         opp = scanner.from_conversion(spec.process, int(r.herb_item_id), r.herb_name, summary, index.get,
                                       index.demand, operations=quantity, ah_cut=ah_cut / 100,
                                       sell_through=sell / 100)
@@ -507,3 +542,84 @@ def render_compare(spec: ProcessSpec, table: pd.DataFrame) -> None:
         st.bar_chart(priced.set_index(spec.unit_title)[[f"Profit per {spec.unit} (g)"]])
     st.caption("No 'other cost per unit' is included here; use the Calculator for that. "
                "Margins are theoretical at listed prices, not demonstrated sales.")
+
+
+# --- Reference yields -----------------------------------------------------------------------------
+
+def render_reference(spec: ProcessSpec, table: pd.DataFrame) -> None:
+    """Type in outside drop data (e.g. Wowhead). Stored apart from experiments and always labelled."""
+    p = f"{spec.prefix}_ref"
+    st.caption(f"Use this when you have no experiments yet: copy the numbers a site such as Wowhead shows for "
+               f"a {spec.unit} - for each output, the **chance** it appears per {spec.operation} and the "
+               f"**average quantity** when it does. These are community estimates, not your data: they are "
+               "never mixed into your experiments, and every result that uses them is labelled.")
+    chosen = item_picker(table, f"{p}_input", spec.unit_title)
+    if chosen is None:
+        _reference_overview(spec)
+        return
+    input_id, input_name = chosen
+    with db() as conn:
+        existing = database.list_reference_yields(conn, spec.process, input_id)
+    c1, c2 = st.columns([1, 2])
+    per_op = c1.number_input(f"{spec.units.title()} per {spec.operation}", min_value=1, step=1,
+                             value=existing[0]["units_per_operation"] if existing else None,
+                             placeholder="check in game", key=f"{p}_perop_{input_id}",
+                             help=f"Drop chances on such sites are per {spec.operation}. This converts them "
+                                  f"to a yield per {spec.unit}.")
+    source = c2.text_input("Source", value=existing[0]["source"] if existing else "",
+                           placeholder="e.g. Wowhead item page, 2026-10-13", key=f"{p}_src_{input_id}")
+    frame = pd.DataFrame([{"Output item ID": r["output_item_id"], "Output name": r["output_name"],
+                           "Chance per operation (%)": r["chance_pct"], "Average quantity": r["avg_quantity"]}
+                          for r in existing] or [{"Output item ID": None, "Output name": "",
+                                                  "Chance per operation (%)": None, "Average quantity": None}])
+    st.markdown("**Outputs** - add a row per item; item IDs must match your price data")
+    edited = st.data_editor(frame, num_rows="dynamic", hide_index=True, key=f"{p}_editor_{input_id}",
+                            column_config={
+                                "Output item ID": st.column_config.NumberColumn(min_value=1, step=1, format="%d"),
+                                "Chance per operation (%)": st.column_config.NumberColumn(min_value=0.0,
+                                                                                          max_value=100.0),
+                                "Average quantity": st.column_config.NumberColumn(min_value=0.0)})
+    rows = [{"item_id": int(r["Output item ID"]),
+             "name": (str(r["Output name"]).strip() or None) if pd.notna(r["Output name"]) else None,
+             "chance_pct": float(r["Chance per operation (%)"]), "avg_quantity": float(r["Average quantity"]),
+             "units_per_operation": per_op}
+            for _, r in edited.iterrows()
+            if pd.notna(r["Output item ID"]) and pd.notna(r["Chance per operation (%)"])
+            and pd.notna(r["Average quantity"])]
+    if per_op and rows:
+        st.dataframe(pd.DataFrame([{
+            "Output": r["name"] or r["item_id"],
+            f"Yield per {spec.unit}": conversion.yield_from_drop(r["chance_pct"], r["avg_quantity"], per_op)}
+            for r in rows]), hide_index=True,
+            column_config={f"Yield per {spec.unit}": st.column_config.NumberColumn(format="%.4f")})
+    b1, b2, _ = st.columns([1, 1, 3])
+    if b1.button("Save reference yields", type="primary", key=f"{p}_save_{input_id}"):
+        if not per_op:
+            st.error(f"Enter how many {spec.units} one {spec.operation} uses.")
+        elif not rows:
+            st.error("Add at least one output with a chance and an average quantity.")
+        else:
+            try:
+                with db() as conn:
+                    database.save_reference_yields(conn, spec.process, input_id, input_name, rows, source)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.toast("Reference yields saved")
+                st.rerun()
+    if existing and b2.button("Delete these reference yields", key=f"{p}_del_{input_id}"):
+        with db() as conn:
+            database.delete_reference_yields(conn, spec.process, input_id)
+        st.rerun()
+    _reference_overview(spec)
+
+
+def _reference_overview(spec: ProcessSpec) -> None:
+    with db() as conn:
+        refs = database.list_reference_inputs(conn, spec.process)
+    if refs.empty:
+        return
+    st.subheader("Saved reference yields")
+    st.dataframe(refs.rename(columns={"input_item_id": "Item ID", "input_name": spec.unit_title,
+                                      "outputs": "Outputs", "source": "Source", "recorded_at": "Saved (UTC)"}),
+                 hide_index=True, column_config={"Item ID": st.column_config.NumberColumn(format="%d")})

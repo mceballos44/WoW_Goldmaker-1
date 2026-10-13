@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from goldmaker import charexporter, database, profiles, wow_files
+from goldmaker import auto_import, charexporter, database, profiles, wow_files
 
 SOURCE_DISK = "Read SavedVariables from this PC (all alts)"
 SOURCE_UPLOAD = "Upload a file"
@@ -53,6 +53,58 @@ def render() -> None:
 
 # --- Import -----------------------------------------------------------------------------
 
+def run_auto_import(force: bool = False) -> None:
+    """Called on every app run: import characters if CharExporter.lua changed since the last check.
+
+    Cheap when nothing changed (only the file's last-written time is read). Results show in the sidebar.
+    """
+    with db() as conn:
+        if not force and not auto_import.is_enabled(conn):
+            return
+        try:
+            report = auto_import.check_and_import(conn, force=force)
+        except Exception as exc:  # never let a bad file stop the app from starting
+            st.sidebar.warning(f"Automatic character import failed: {exc}")
+            return
+    if report.files_read or force or "cp_auto_report" not in st.session_state:
+        st.session_state["cp_auto_report"] = report      # keep the last report that actually read a file
+    if report.changed:
+        st.toast(f"Imported {len(report.changed)} character snapshot(s) from CharExporter")
+        st.sidebar.success("Characters updated from CharExporter: " + ", ".join(report.changed))
+    for error in report.errors:
+        st.sidebar.warning(f"Character import: {error}")
+
+
+def _render_auto_import() -> None:
+    with db() as conn:
+        enabled = auto_import.is_enabled(conn)
+        locations = auto_import.search_locations(conn)
+    st.markdown("**Automatic import**")
+    new_value = st.toggle("Import automatically whenever WoW has written a new CharExporter.lua",
+                          value=enabled, key="cp_auto_toggle",
+                          help="Checked every time the app runs or refreshes. Only the file's last-written time is "
+                               "read unless it changed. Older snapshots never replace newer ones; your typed-in "
+                               "stats are never touched; nothing is written to the WoW folder.")
+    if new_value != enabled:
+        with db() as conn:
+            auto_import.set_enabled(conn, new_value)
+        st.rerun()
+    report = st.session_state.get("cp_auto_report")
+    if not locations:
+        st.caption("No WoW folder known yet - set it once below (*Find CharExporter.lua*) and it is remembered.")
+    elif report is not None:
+        if report.files:
+            st.caption(f"Watching: {', '.join(report.files)}. "
+                       f"Last check imported {len(report.changed)} new/updated snapshot(s).")
+        else:
+            st.caption(f"No CharExporter.lua found in {', '.join(locations)} yet. WoW creates it when you log out "
+                       "(or /reload) with the addon's Auto-save on Logout ticked.")
+    if st.button("Check now", key="cp_auto_now"):
+        run_auto_import(force=True)
+        st.rerun()
+    st.divider()
+
+
 def render_import() -> None:
     with st.expander("How to set up CharExporter (one time)", expanded=False):
         st.markdown(
@@ -68,7 +120,8 @@ def render_import() -> None:
             "percentages. Enter those on the *Profession stats* tab. Re-importing never "
             "overwrites what you typed.")
 
-    method = st.radio("Source", [SOURCE_DISK, SOURCE_UPLOAD, SOURCE_PASTE], horizontal=True,
+    _render_auto_import()
+    method = st.radio("Manual import - source", [SOURCE_DISK, SOURCE_UPLOAD, SOURCE_PASTE], horizontal=True,
                       key="cp_method")
     if method == SOURCE_DISK:
         _source_from_disk()
