@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from . import conversion
-from .crafting import RecipeEvaluation, days_to_sell
+from .crafting import days_to_sell
 
 SMALL_SAMPLE = ("single batch", "low")
 

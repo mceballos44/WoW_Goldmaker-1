@@ -2,9 +2,10 @@
 
 Run with:  streamlit run app.py        (or double-click run_app.bat on Windows)
 
-Stage 1: TSM price download + local cache, searchable price table,
-manual price overrides. Also: character profile import from CharExporter and
-Stage 2 (milling) and Stage 3 (recipes, crafting/housing). Other tabs are placeholders.
+Stage 1: TSM price download + local cache, searchable price table, manual price overrides.
+Character profile import from CharExporter. Stage 2: milling. Stage 3: recipes, crafting/housing.
+Stage 4: prospecting, Jewelcrafting / Alchemy with profiles and quality tiers.
+Stage 5: opportunity scanner, AH investment scenarios, Excel import/export.
 """
 
 from __future__ import annotations
@@ -18,16 +19,21 @@ import streamlit as st
 
 from goldmaker import config, database, pricing, tsm_client
 import ui_crafting
+import ui_excel
+import ui_investment
 import ui_milling
+import ui_profession
 import ui_profiles
+import ui_prospecting
+import ui_scanner
 from goldmaker.currency import format_gold, gold_to_copper
 
 st.set_page_config(page_title="WoW Goldmaker", page_icon="💰", layout="wide")
 
 TAB_NAMES = [
-    "Dashboard", "Milling", "Prospecting", "Jewelcrafting", "Alchemy",
-    "Housing / Crafting", "AH Investment", "Price Database",
-    "Character Profiles", "Settings",
+    "Dashboard", "Opportunities", "Milling", "Prospecting", "Jewelcrafting", "Alchemy",
+    "Housing / Crafting", "AH Investment", "Price Database", "Character Profiles",
+    "Import / Export", "Settings",
 ]
 SCOPE_LABELS = {
     "commodities": "Commodities (region-wide)",
@@ -175,9 +181,9 @@ def render_sidebar() -> tuple[str, str, str]:
 
 def render_dashboard(region: str, realm_slug: str, table: pd.DataFrame) -> None:
     st.header("Dashboard")
-    st.info("Installed so far: price download, cache, search, manual overrides, character profile "
-            "import from CharExporter, the milling calculator, and the recipe/housing crafting calculator. "
-            "Prospecting, profession-stat modelling and the opportunity scanner arrive in later stages.")
+    st.info("All five stages are installed: prices and overrides, character import, milling, recipes and "
+            "crafting/housing, prospecting, Jewelcrafting / Alchemy with profiles, the opportunity scanner, "
+            "AH investment scenarios and Excel import/export. See *Opportunities* for a ranked overview.")
     rows = dataset_rows(region, realm_slug)
     cols = st.columns(4)
     cols[0].metric("Items with a price", f"{int(table['effective_copper'].notna().sum()):,}" if not table.empty else "0")
@@ -207,10 +213,14 @@ def render_dashboard(region: str, realm_slug: str, table: pd.DataFrame) -> None:
         st.warning("No price data is cached yet. Click **Refresh Prices** in the sidebar.")
 
 
-def render_placeholder(name: str, stage: str, bullets: list[str]) -> None:
-    st.header(name)
-    st.info(f"Coming in {stage}.")
-    st.markdown("\n".join(f"- {b}" for b in bullets))
+def export_context(region: str, realm_slug: str, basis: str) -> dict:
+    """What an Excel export or report should state about the data it was built from."""
+    context = {"Region": region.upper(), "Realm slug": realm_slug,
+               "Price basis": config.PRICE_BASIS_LABELS.get(basis, basis)}
+    for scope, row in dataset_rows(region, realm_slug).items():
+        context[f"TSM {scope} data time (UTC)"] = (row["source_updated_at"] if row is not None
+                                                   else "not downloaded")
+    return context
 
 
 def render_price_database(table: pd.DataFrame, region: str, realm_slug: str) -> None:
@@ -389,31 +399,31 @@ def main() -> None:
         version = database.data_version(conn)
     table = load_price_table(version, region, realm_slug, basis, int(time.time() // 300))
 
-    tabs = st.tabs(TAB_NAMES)
-    with tabs[0]:
+    context = export_context(region, realm_slug, basis)
+    tabs = dict(zip(TAB_NAMES, st.tabs(TAB_NAMES)))
+    with tabs["Dashboard"]:
         render_dashboard(region, realm_slug, table)
-    with tabs[1]:
+    with tabs["Opportunities"]:
+        ui_scanner.render(table)
+    with tabs["Milling"]:
         ui_milling.render(table)
-    with tabs[2]:
-        render_placeholder("Prospecting", "Stage 4", [
-            "Ore → gem/glass outputs with configurable item IDs and empirical yields"])
-    with tabs[3]:
-        render_placeholder("Jewelcrafting", "Stage 4", [
-            "Profession stats profiles, Multicraft / Resourcefulness / Ingenuity modelling"])
-    with tabs[4]:
-        render_placeholder("Alchemy", "Stage 4", [
-            "Flasks and potions with reagent/output quality and per-character profiles"])
-    with tabs[5]:
+    with tabs["Prospecting"]:
+        ui_prospecting.render(table)
+    with tabs["Jewelcrafting"]:
+        ui_profession.render(table, "Jewelcrafting")
+    with tabs["Alchemy"]:
+        ui_profession.render(table, "Alchemy")
+    with tabs["Housing / Crafting"]:
         ui_crafting.render(table)
-    with tabs[6]:
-        render_placeholder("AH Investment", "Stage 5", [
-            "Bearish / baseline / bullish scenarios, break-even resale price"])
-    with tabs[7]:
+    with tabs["AH Investment"]:
+        ui_investment.render(table, context)
+    with tabs["Price Database"]:
         render_price_database(table, region, realm_slug)
-    with tabs[8]:
+    with tabs["Character Profiles"]:
         ui_profiles.render()
-    with tabs[9]:
+    with tabs["Import / Export"]:
+        ui_excel.render(table, context)
+    with tabs["Settings"]:
         render_settings()
-
 
 main()

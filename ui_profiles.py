@@ -342,6 +342,16 @@ def render_stats() -> None:
                                       placeholder="not entered", key=f"cp_rs_{suffix}")
     ingenuity = c4.number_input("Ingenuity %", min_value=0.0, value=existing.get("ingenuity_pct"),
                                 step=0.1, format="%.2f", placeholder="not entered", key=f"cp_in_{suffix}")
+    st.caption("Optional, for the crafting calculators: how big each effect is when it happens. The game does not "
+               "show these as one number - measure them from your own crafts (e.g. reagents returned per "
+               "Resourcefulness proc). Without them, Resourcefulness / Multicraft stay switched off.")
+    s1, s2, _ = st.columns([1, 1, 2])
+    saved_pct = s1.number_input("Resourcefulness: share of eligible reagents saved per proc (%)", min_value=0.0,
+                                max_value=100.0, value=existing.get("resourcefulness_saved_pct"), step=1.0,
+                                placeholder="not measured", key=f"cp_rss_{suffix}")
+    extra_pct = s2.number_input("Multicraft: extra output per proc (% of base)", min_value=0.0,
+                                value=existing.get("multicraft_extra_pct"), step=5.0,
+                                placeholder="not measured", key=f"cp_mce_{suffix}")
     notes = st.text_input("Notes (e.g. which gear/buffs these stats include)",
                           value=existing.get("notes") or "", key=f"cp_notes_{suffix}")
 
@@ -349,7 +359,7 @@ def render_stats() -> None:
     if b1.button("Save stats", type="primary"):
         with db() as conn:
             database.upsert_profession_stats(conn, key, profession, skill, multicraft,
-                                             resourcefulness, ingenuity, notes)
+                                             resourcefulness, ingenuity, notes, saved_pct, extra_pct)
         st.toast(f"Saved stats for {key} - {profession}")
         st.rerun()
     if existing and b2.button("Clear saved stats"):
@@ -369,5 +379,6 @@ def render_stats() -> None:
         st.dataframe(saved.rename(columns={
             "character_key": "Character", "profession": "Profession", "crafting_skill": "Crafting skill",
             "multicraft_pct": "Multicraft %", "resourcefulness_pct": "Resourcefulness %",
-            "ingenuity_pct": "Ingenuity %", "notes": "Notes", "updated_at": "Updated (UTC)"}),
+            "ingenuity_pct": "Ingenuity %", "notes": "Notes", "updated_at": "Updated (UTC)",
+            "resourcefulness_saved_pct": "Resourcefulness saved %", "multicraft_extra_pct": "Multicraft extra %"}),
             hide_index=True)

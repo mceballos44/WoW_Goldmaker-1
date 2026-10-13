@@ -27,7 +27,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
-from . import config, conversion, crafting, database, pricing, recipes
+from . import conversion, crafting, database, pricing, recipes
 from .currency import copper_to_gold, gold_to_copper, is_missing
 
 PRICE_SHEET_COLUMNS = ["item_id", "name", "price_gold", "note"]

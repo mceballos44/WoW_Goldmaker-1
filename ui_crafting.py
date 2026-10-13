@@ -12,7 +12,7 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-from goldmaker import config, crafting, database, milling, pricing, recipes
+from goldmaker import config, crafting, database, pricing, profiles, recipes
 from goldmaker.crafting import Mechanics
 from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
 from ui_common import db, default_ah_cut_pct, item_picker
@@ -21,6 +21,7 @@ GOLD = st.column_config.NumberColumn(format="%.2f")
 CHEAPEST = "Cheapest priced"
 NEW_RECIPE = "+ New recipe"
 EXAMPLE_KEY = "user-example-gold-sunglass-vial"
+NO_PROFILE = "No profile (enter values by hand)"
 
 
 def render(table: pd.DataFrame) -> None:
@@ -58,22 +59,65 @@ def load_resources() -> tuple:
     return opportunity, on_hand
 
 
-def mechanics_inputs(prefix: str) -> Mechanics:
-    """Optional Resourcefulness / Multicraft inputs. Nothing is applied unless both fields of a pair are filled."""
-    with st.expander("Resourcefulness / Multicraft (optional - off unless both fields of a pair are filled)"):
+def filter_profession(recipe_list: list, profession: Optional[str]) -> list:
+    """Recipes whose profession contains ``profession`` (case-insensitive); all when None."""
+    if not profession:
+        return recipe_list
+    wanted = profession.lower()
+    return [r for r in recipe_list if r.profession and wanted in r.profession.lower()]
+
+
+def profile_picker(prefix: str, profession: Optional[str] = None):
+    """Optional character profile whose stats prefill Resourcefulness / Multicraft. Returns a profile or None."""
+    with db() as conn:
+        choices = profiles.list_profile_choices(conn, profession)
+    if not choices:
+        st.caption("No imported character profile" + (f" with {profession}" if profession else "")
+                   + " - import one on *Character Profiles* to prefill your stats.")
+        return None
+    labels = [NO_PROFILE] + [f"{c} - {p}" for c, p in choices]
+    pick = st.selectbox("Character profile", range(len(labels)), format_func=lambda i: labels[i],
+                        key=f"{prefix}_profile",
+                        help="Prefills Resourcefulness / Multicraft from the stats saved on Character Profiles.")
+    if pick == 0:
+        return None
+    with db() as conn:
+        profile = profiles.load_profile(conn, *choices[pick - 1])
+    for warning in profiles.profile_warnings(profile):
+        st.caption(f"⚠️ {warning}")
+    return profile
+
+
+def mechanics_inputs(prefix: str, profile=None) -> Mechanics:
+    """Optional Resourcefulness / Multicraft inputs. Nothing is applied unless both fields of a pair are filled.
+
+    With a profile, the fields start from its saved values (chance and measured size).
+    """
+    tag = profile.label if profile is not None else "manual"
+    pre = {}
+    if profile is not None:
+        pre = {"rc": profile.resourcefulness_pct, "rs": profile.resourcefulness_saved_pct,
+               "mc": profile.multicraft_pct, "me": profile.multicraft_extra_pct}
+    title = "Resourcefulness / Multicraft (optional - off unless both fields of a pair are filled)"
+    with st.expander(title + (f" - from {profile.label}" if profile is not None else ""),
+                     expanded=profile is not None):
         st.caption("This app does not know the real numbers. Enter values you have measured. "
                    "Resourcefulness only saves reagents marked 'savings eligible' in the recipe; "
                    "Multicraft only adds output. The two effects are applied separately, never added together. "
                    "Ingenuity and concentration are not modelled.")
         c1, c2, c3, c4 = st.columns(4)
-        rc = c1.number_input("Resourcefulness chance (%)", 0.0, 100.0, value=None, step=1.0,
-                             placeholder="off", key=f"{prefix}_rc")
-        rs = c2.number_input("Share of eligible reagents saved (%)", 0.0, 100.0, value=None, step=1.0,
-                             placeholder="off", key=f"{prefix}_rs")
-        mc = c3.number_input("Multicraft chance (%)", 0.0, 100.0, value=None, step=1.0,
-                             placeholder="off", key=f"{prefix}_mc")
-        me = c4.number_input("Extra output on proc (% of base)", 0.0, value=None, step=5.0,
-                             placeholder="off", key=f"{prefix}_me")
+        rc = c1.number_input("Resourcefulness chance (%)", 0.0, 100.0, value=pre.get("rc"), step=1.0,
+                             placeholder="off", key=f"{prefix}_rc_{tag}")
+        rs = c2.number_input("Share of eligible reagents saved (%)", 0.0, 100.0, value=pre.get("rs"), step=1.0,
+                             placeholder="off", key=f"{prefix}_rs_{tag}")
+        mc = c3.number_input("Multicraft chance (%)", 0.0, 100.0, value=pre.get("mc"), step=1.0,
+                             placeholder="off", key=f"{prefix}_mc_{tag}")
+        me = c4.number_input("Extra output on proc (% of base)", 0.0, value=pre.get("me"), step=5.0,
+                             placeholder="off", key=f"{prefix}_me_{tag}")
+        if profile is not None:
+            _, notes = crafting.mechanics_from_profile(profile)
+            for note in notes:
+                st.caption(note)
     return Mechanics(
         resourcefulness_chance=(rc or 0.0) / 100,
         resourcefulness_saved_fraction=None if rs is None else rs / 100,
@@ -83,7 +127,9 @@ def mechanics_inputs(prefix: str) -> Mechanics:
 
 # --- Compare ----------------------------------------------------------------------------------------
 
-def render_compare(index: pricing.PriceIndex, recipe_list: list) -> None:
+def render_compare(index: pricing.PriceIndex, recipe_list: list, prefix: str = "cmp",
+                   profession: Optional[str] = None) -> None:
+    recipe_list = filter_profession(recipe_list, profession)
     if not recipe_list:
         st.info("No recipes yet. Add or import some on the *Recipes* tab.")
         return
@@ -93,19 +139,20 @@ def render_compare(index: pricing.PriceIndex, recipe_list: list) -> None:
         return sorted({getattr(r, attr) for r in recipe_list if getattr(r, attr)})
 
     f1, f2, f3, f4 = st.columns(4)
-    sel_prof = f1.multiselect("Profession", options("profession"), key="cmp_prof")
-    sel_exp = f2.multiselect("Expansion", options("expansion"), key="cmp_exp")
-    sel_patch = f3.multiselect("Patch", options("game_patch"), key="cmp_patch")
-    sel_cat = f4.multiselect("Category", options("category"), key="cmp_cat")
+    sel_prof = f1.multiselect("Profession", options("profession"), key=f"{prefix}_prof")
+    sel_exp = f2.multiselect("Expansion", options("expansion"), key=f"{prefix}_exp")
+    sel_patch = f3.multiselect("Patch", options("game_patch"), key=f"{prefix}_patch")
+    sel_cat = f4.multiselect("Category", options("category"), key=f"{prefix}_cat")
 
     p1, p2, p3, p4 = st.columns(4)
-    ah_cut = p1.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key="cmp_ahcut")
+    ah_cut = p1.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key=f"{prefix}_ahcut")
     sell_through = p2.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0,
-                                   key="cmp_sell")
+                                   key=f"{prefix}_sell")
     sort_by = p3.selectbox("Rank by", ["Profit / craft (g)", "ROI %", "Profit at stock cap (g)",
-                                       "Cost / craft (g)"], key="cmp_sort")
-    only_priced = p4.checkbox("Only fully priced", value=True, key="cmp_priced")
-    mechanics = mechanics_inputs("cmp")
+                                       "Cost / craft (g)"], key=f"{prefix}_sort")
+    only_priced = p4.checkbox("Only fully priced", value=True, key=f"{prefix}_priced")
+    profile = profile_picker(prefix, profession)
+    mechanics = mechanics_inputs(prefix, profile)
 
     chosen = [r for r in recipe_list
               if (not sel_prof or r.profession in sel_prof) and (not sel_exp or r.expansion in sel_exp)
@@ -170,16 +217,26 @@ def render_compare(index: pricing.PriceIndex, recipe_list: list) -> None:
 
 # --- Calculator -------------------------------------------------------------------------------------
 
-def render_calculator(index: pricing.PriceIndex, recipe_list: list) -> None:
+def render_calculator(index: pricing.PriceIndex, recipe_list: list, prefix: str = "calc",
+                      profession: Optional[str] = None) -> None:
+    recipe_list = filter_profession(recipe_list, profession)
     if not recipe_list:
         st.info("No recipes yet. Add or import some on the *Recipes* tab.")
         return
     opportunity, on_hand = load_resources()
     labels = {f"{r.name} - {r.profession or 'no profession'} ({r.key})": r for r in recipe_list}
-    recipe = labels[st.selectbox("Recipe", list(labels), key="calc_recipe")]
+    recipe = labels[st.selectbox("Recipe", list(labels), key=f"{prefix}_recipe")]
 
     for warning in recipes.recipe_warnings(recipe):
         st.caption(f"⚠️ {warning}")
+    profile = profile_picker(prefix, profession)
+    if profile is not None and recipe.required_skill is not None:
+        if profile.crafting_skill is None:
+            st.caption(f"Recipe needs skill {recipe.required_skill}; this profile has no crafting skill entered.")
+        else:
+            st.caption(f"Recipe skill {recipe.required_skill} vs your crafting skill {profile.crafting_skill:g}. "
+                       "Skill vs recipe difficulty decides output quality in game; that is not modelled - use "
+                       "the quality-tier section with odds from your own crafts.")
     with st.expander("Recipe details"):
         st.write({"Source": recipe.source or "-", "Patch": recipe.game_patch or "-",
                   "Last verified": recipe.last_verified or "never", "Expansion": recipe.expansion or "-",
@@ -192,24 +249,24 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list) -> None:
             names = {f"{o.item_name or o.item_id} ({o.quality_label or 'no label'}) x{o.quantity}": o.item_id
                      for o in options}
             pick = st.radio(f"Reagent slot {slot} has alternatives", [CHEAPEST] + list(names),
-                            horizontal=True, key=f"calc_slot_{recipe.key}_{slot}")
+                            horizontal=True, key=f"{prefix}_slot_{recipe.key}_{slot}")
             if pick != CHEAPEST:
                 choices[slot] = names[pick]
 
     c1, c2, c3 = st.columns(3)
-    crafts = int(c1.number_input("Number of crafts", min_value=1, value=10, step=1, key=f"calc_n_{recipe.key}"))
-    ah_cut = c2.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key="calc_ahcut")
+    crafts = int(c1.number_input("Number of crafts", min_value=1, value=10, step=1, key=f"{prefix}_n_{recipe.key}"))
+    ah_cut = c2.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key=f"{prefix}_ahcut")
     sell_through = c3.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0,
-                                   key="calc_sell")
+                                   key=f"{prefix}_sell")
 
     output = index.get(recipe.crafted_item_id)
     output_name = recipe.crafted_item_name or output.name or f"item {recipe.crafted_item_id}"
     default_output_g = None if output.is_missing else copper_to_gold(output.copper)
     output_g = st.number_input(f"{output_name}: price per unit (g)", min_value=0.0, value=default_output_g,
                                step=0.01, format="%.4f", placeholder="no price found - enter one",
-                               key=f"calc_out_{recipe.key}",
+                               key=f"{prefix}_out_{recipe.key}",
                                help="Prefilled from your price data. Editing changes this calculation only.")
-    mechanics = mechanics_inputs("calc")
+    mechanics = mechanics_inputs(prefix, profile)
 
     rows, defaults = [], {}
     for r in recipe.reagents:
@@ -231,7 +288,7 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list) -> None:
     st.markdown("**Reagents** - edit a price to change this calculation only. For non-auctionable reagents the "
                 "value is an opportunity cost (leave empty to count it as free).")
     edited = st.data_editor(
-        pd.DataFrame(rows), hide_index=True, key=f"calc_editor_{recipe.key}",
+        pd.DataFrame(rows), hide_index=True, key=f"{prefix}_editor_{recipe.key}",
         disabled=["Slot", "Item ID", "Item", "Qty / craft", "Auctionable", "Source", "In stock"],
         column_config={"Item ID": st.column_config.NumberColumn(format="%d"),
                        "Price or opportunity cost (g)": st.column_config.NumberColumn(min_value=0.0, format="%.4f"),
@@ -259,6 +316,8 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list) -> None:
         return
     _render_craft_result(result, recipe, crafts, output_name, defaults, prices, output, index,
                          sell_through / 100)
+    render_breakeven_materials(result, mechanics, prefix, recipe)
+    render_quality_tiers(result, recipe, index, prefix)
 
 
 def _render_craft_result(result, recipe, crafts, output_name, defaults, prices, output, index,
@@ -330,6 +389,86 @@ def render_demand(index: pricing.PriceIndex, recipe: recipes.Recipe, result, cra
     if days is not None and days > 1:
         st.warning(f"That is {days:.1f} days of TSM-reported daily sales. Profit assumes it all sells at "
                    "today's price (one day is a rule of thumb, not a limit).")
+
+
+def render_breakeven_materials(result, mechanics: Mechanics, prefix: str, recipe: recipes.Recipe) -> None:
+    """Highest price per reagent at which the craft still breaks even (e.g. an expensive herb)."""
+    rows = []
+    for line in result.lines:
+        limit = crafting.breakeven_reagent_price(result, line.item_id, mechanics)
+        rows.append({"Reagent": line.name, "Qty / craft": line.quantity,
+                     "Current price (g)": copper_to_gold(line.unit_price_copper),
+                     "Break-even price (g)": copper_to_gold(limit),
+                     "Headroom (g)": (None if limit is None or line.unit_price_copper is None
+                                      else copper_to_gold(limit - line.unit_price_copper))})
+    st.markdown("**Break-even material prices** - the most you can pay for one reagent (others at the "
+                "prices above) before the craft stops breaking even")
+    st.dataframe(pd.DataFrame(rows), hide_index=True, column_config={
+        "Current price (g)": GOLD, "Break-even price (g)": GOLD, "Headroom (g)": GOLD})
+    st.caption("Needs the output price and every other reagent priced. Includes expected Resourcefulness "
+               "savings for savings-eligible reagents when that effect is switched on.")
+
+
+def render_quality_tiers(result, recipe: recipes.Recipe, index: pricing.PriceIndex, prefix: str) -> None:
+    """Output quality tiers (each its own item ID): profit per tier, expected profit from the user's odds."""
+    with db() as conn:
+        tiers = database.list_output_tiers(conn, recipe.key)
+    with st.expander(f"Output quality tiers ({len(tiers)} set)" if tiers else
+                     "Output quality tiers (e.g. silver / gold quality) - not set for this recipe",
+                     expanded=bool(tiers)):
+        st.caption("Each quality of the crafted item is a separate item with its own item ID and price. "
+                   "The app does not know your odds of each quality - enter them from your own crafts.")
+        edit = pd.DataFrame([{"Tier": t["tier_label"], "Item ID": t["item_id"], "Name": t["item_name"]}
+                             for t in tiers] or [{"Tier": "", "Item ID": None, "Name": ""}])
+        edited = st.data_editor(edit, num_rows="dynamic", hide_index=True, key=f"{prefix}_tiers_{recipe.key}",
+                                column_config={"Item ID": st.column_config.NumberColumn(min_value=1, step=1,
+                                                                                       format="%d")})
+        if st.button("Save quality tiers", key=f"{prefix}_tiers_save_{recipe.key}"):
+            rows = [{"tier_label": str(r["Tier"]).strip(), "item_id": int(r["Item ID"]),
+                     "item_name": (str(r["Name"]).strip() or None) if pd.notna(r["Name"]) else None}
+                    for _, r in edited.iterrows()
+                    if pd.notna(r["Item ID"]) and str(r["Tier"] or "").strip()]
+            try:
+                with db() as conn:
+                    database.save_output_tiers(conn, recipe.key, rows)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.toast("Quality tiers saved")
+                st.rerun()
+        if not tiers:
+            return
+
+        prices, odds, cols = {}, {}, st.columns(min(len(tiers), 4))
+        for n, t in enumerate(tiers):
+            res = index.get(t["item_id"])
+            col = cols[n % len(cols)]
+            name = t["item_name"] or res.name or f"item {t['item_id']}"
+            price_g = col.number_input(f"{t['tier_label']}: {name} price (g)", min_value=0.0,
+                                       value=None if res.is_missing else copper_to_gold(res.copper), step=0.01,
+                                       format="%.4f", placeholder="no price", key=f"{prefix}_tp_{recipe.key}_{n}")
+            chance = col.number_input(f"{t['tier_label']}: chance (%)", 0.0, 100.0, value=None, step=1.0,
+                                      placeholder="your odds", key=f"{prefix}_tc_{recipe.key}_{n}")
+            prices[t["item_id"]] = gold_to_copper(price_g) if price_g is not None else None
+            if chance is not None:
+                odds[t["tier_label"]] = chance / 100
+        analysis = crafting.analyse_quality_tiers(
+            result, [(t["tier_label"], t["item_id"], t["item_name"]) for t in tiers], prices, odds)
+        st.dataframe(pd.DataFrame([{
+            "Tier": l.label, "Price (g)": copper_to_gold(l.price_copper),
+            "Net per craft if all this tier (g)": copper_to_gold(l.net_per_craft),
+            "Profit per craft if all this tier (g)": copper_to_gold(l.profit_if_all),
+            "Profitable?": {True: "yes", False: "no", None: "unknown"}[l.profitable],
+            "Your chance %": None if l.probability is None else l.probability * 100,
+        } for l in analysis.lines]), hide_index=True, column_config={
+            "Price (g)": GOLD, "Net per craft if all this tier (g)": GOLD,
+            "Profit per craft if all this tier (g)": GOLD,
+            "Your chance %": st.column_config.NumberColumn(format="%.1f")})
+        q1, q2 = st.columns(2)
+        q1.metric("Break-even price for any tier", format_gold(analysis.breakeven_output_price))
+        q2.metric("Expected profit per craft (your odds)", format_gold(analysis.expected_profit_per_craft))
+        for note in analysis.notes:
+            st.caption(note)
 
 
 # --- Recipes ------------------------------------------------------------------------------------------
