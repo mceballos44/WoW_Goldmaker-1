@@ -58,6 +58,12 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 ## Ideas / not built yet
 
+- [ ] **Crafting quality tiers from Blizzard.** Badges come from quality labels; the Item API field for a reagent's
+      crafting quality (if any) is unverified. Paste one *Show what Blizzard sent* item / recipe with a quality
+      reagent so the tier can be read reliably.
+- [ ] Coiled Amani Hookshot (and similar): Blizzard sends no crafted item and no item matches the name. Type the
+      crafted item ID in the preview for now; check whether the response's `media` / `_links` lead to it.
+
 - [ ] **Auctionator prices** from its SavedVariables file (read-only, like CharExporter). Need the first ~40 lines of
       `...\WTF\Account\<ACCOUNT>\SavedVariables\Auctionator.lua` to see the layout before parsing it.
 - [ ] Item names for Blizzard-only prices (Blizzard item API, cached) when no TSM data is loaded.
@@ -73,6 +79,10 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 - [ ] Dashboard charts across calculators (today each calculator has its own charts).
 
 ## Done
+
+- [x] 2026-10-14 Item icons + quality badges; soulbound / account-bound reagents treated as not on the AH
+      (Blizzard Item API binding); time cost for self-gathered items (gold per hour / units per hour); crafted
+      item ID can be typed for skipped Blizzard recipes.
 
 - [x] 2026-10-14 App reopens as it was left: manual yields saved per herb/ore (only once edited), and calculator /
       filter inputs remembered in the database (`ui_common.saved` + `persist_ui_state`). Prices stay fresh.

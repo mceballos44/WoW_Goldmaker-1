@@ -428,3 +428,35 @@ def analyse_quality_tiers(result: CraftResult, tiers: list, prices: dict,
         notes.append("Reagent cost is incomplete, so tier profits cannot be calculated.")
     return QualityAnalysis(tuple(lines), result.breakeven_output_price, total, expected_net,
                            expected_profit, tuple(notes))
+
+
+# --- cost of items you gather yourself ----------------------------------------------------------------
+
+SETTING_GOLD_PER_HOUR = "time_value_gold_per_hour"
+
+
+def time_cost_per_unit(gold_per_hour_copper: Optional[float], units_per_hour: Optional[float]) -> Optional[float]:
+    """What one self-gathered unit costs in your time: your gold per hour / units gathered per hour."""
+    def missing(v) -> bool:
+        return v is None or v != v                       # None or NaN (an empty database cell)
+    if missing(gold_per_hour_copper) or missing(units_per_hour) or units_per_hour <= 0 or gold_per_hour_copper < 0:
+        return None
+    return gold_per_hour_copper / units_per_hour
+
+
+def resource_costs(resources, gold_per_hour_copper: Optional[float] = None) -> tuple:
+    """(opportunity cost by item, how each was set) from ``database.list_item_resources`` rows.
+
+    A cost you typed wins; otherwise a time cost from units gathered per hour x your gold per hour.
+    """
+    costs, basis = {}, {}
+    for r in resources.itertuples():
+        item_id = int(r.item_id)
+        typed = getattr(r, "opportunity_cost_copper", None)
+        if typed is not None and typed == typed:
+            costs[item_id], basis[item_id] = float(typed), "your cost"
+            continue
+        timed = time_cost_per_unit(gold_per_hour_copper, getattr(r, "gather_units_per_hour", None))
+        if timed is not None:
+            costs[item_id], basis[item_id] = timed, "time cost"
+    return costs, basis

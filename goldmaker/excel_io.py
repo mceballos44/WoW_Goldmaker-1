@@ -72,8 +72,8 @@ def collect(conn, table: pd.DataFrame, context: dict, ah_cut: float = 0.05,
     index = pricing.PriceIndex(table)
     recipe_list = [recipes.Recipe.from_row(r) for r in database.list_recipe_rows(conn)]
     resources = database.list_item_resources(conn)
-    opportunity = {int(r.item_id): int(r.opportunity_cost_copper)
-                   for r in resources.itertuples() if pd.notna(r.opportunity_cost_copper)}
+    gph = database.get_setting(conn, crafting.SETTING_GOLD_PER_HOUR)
+    opportunity, _ = crafting.resource_costs(resources, gold_to_copper(float(gph)) if gph else None)
     on_hand = {int(r.item_id): int(r.on_hand) for r in resources.itertuples() if pd.notna(r.on_hand)}
     evaluations = crafting.evaluate_recipes(recipe_list, index.get, index.demand, opportunity, on_hand,
                                             ah_cut=ah_cut, sell_through=sell_through)

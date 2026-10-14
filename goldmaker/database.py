@@ -234,6 +234,17 @@ CREATE TABLE IF NOT EXISTS manual_yields (
     PRIMARY KEY (process, input_item_id, output_item_id)
 );
 
+-- Item facts from Blizzard's Item API (icon, soulbound, rarity, crafting quality tier).
+CREATE TABLE IF NOT EXISTS item_info (
+    item_id        INTEGER PRIMARY KEY,
+    name           TEXT,
+    icon_url       TEXT,
+    binding        TEXT,
+    rarity         TEXT,
+    crafting_tier  INTEGER,
+    fetched_at     TEXT NOT NULL
+);
+
 -- Output quality tiers of a recipe: each tier is its own item ID (e.g. silver / gold quality).
 CREATE TABLE IF NOT EXISTS recipe_output_tiers (
     recipe_id   INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
@@ -251,6 +262,7 @@ PROCESSES = ("milling", "prospecting")
 _ADDED_COLUMNS = {
     "milling_experiments": [("process", "TEXT NOT NULL DEFAULT 'milling'")],
     "profession_stats": [("resourcefulness_saved_pct", "REAL"), ("multicraft_extra_pct", "REAL")],
+    "item_resources": [("gather_units_per_hour", "REAL")],
 }
 
 PRICE_TABLE_COLUMNS = [
@@ -780,21 +792,27 @@ def delete_recipe(conn: sqlite3.Connection, recipe_key: str) -> None:
 
 def upsert_item_resource(conn: sqlite3.Connection, item_id: int, name: Optional[str] = None,
                          on_hand: Optional[int] = None,
-                         opportunity_cost_copper: Optional[int] = None, notes: str = "") -> None:
+                         opportunity_cost_copper: Optional[int] = None, notes: str = "",
+                         gather_units_per_hour: Optional[float] = None) -> None:
+    """``gather_units_per_hour``: how many you collect yourself per hour (for a time-based cost)."""
     if on_hand is not None and on_hand < 0:
         raise ValueError("Units on hand cannot be negative.")
+    if gather_units_per_hour is not None and gather_units_per_hour <= 0:
+        raise ValueError("Units gathered per hour must be above 0 (leave it empty if unknown).")
     if opportunity_cost_copper is not None and opportunity_cost_copper < 0:
         raise ValueError("Opportunity cost cannot be negative.")
     with conn:
         conn.execute(
-            """INSERT INTO item_resources (item_id, name, on_hand, opportunity_cost_copper, notes, updated_at)
-               VALUES (?,?,?,?,?,?)
+            """INSERT INTO item_resources (item_id, name, on_hand, opportunity_cost_copper, notes, updated_at,
+                                          gather_units_per_hour)
+               VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(item_id) DO UPDATE SET
                  name = COALESCE(excluded.name, item_resources.name),
                  on_hand = excluded.on_hand,
                  opportunity_cost_copper = excluded.opportunity_cost_copper,
-                 notes = excluded.notes, updated_at = excluded.updated_at""",
-            (int(item_id), name, on_hand, opportunity_cost_copper, notes, utc_now_iso()))
+                 notes = excluded.notes, updated_at = excluded.updated_at,
+                 gather_units_per_hour = excluded.gather_units_per_hour""",
+            (int(item_id), name, on_hand, opportunity_cost_copper, notes, utc_now_iso(), gather_units_per_hour))
 
 
 def list_item_resources(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -989,3 +1007,21 @@ def load_ui_state(conn: sqlite3.Connection) -> dict:
 
 def save_ui_state(conn: sqlite3.Connection, state: dict) -> None:
     set_setting(conn, UI_STATE_KEY, json.dumps(state, sort_keys=True))
+
+
+# --- Item facts (Blizzard Item API) -------------------------------------------------------------------
+
+def save_item_info(conn: sqlite3.Connection, infos) -> None:
+    """``infos``: iterable of ``item_info.ItemInfo``."""
+    now = utc_now_iso()
+    with conn:
+        conn.executemany("INSERT OR REPLACE INTO item_info VALUES (?,?,?,?,?,?,?)",
+                         [(i.item_id, i.name, i.icon_url, i.binding, i.rarity, i.crafting_tier, now) for i in infos])
+
+
+def load_item_info(conn: sqlite3.Connection) -> dict:
+    """{item_id: ItemInfo} for every item fetched so far."""
+    from .item_info import ItemInfo
+    return {r["item_id"]: ItemInfo(r["item_id"], r["name"], r["icon_url"], r["binding"], r["rarity"],
+                                   r["crafting_tier"])
+            for r in conn.execute("SELECT * FROM item_info")}

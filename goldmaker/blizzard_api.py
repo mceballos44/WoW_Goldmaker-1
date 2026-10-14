@@ -167,6 +167,9 @@ class BlizzardClient:
     def item(self, item_id: int) -> dict:
         return self.get(f"/data/wow/item/{int(item_id)}", cache_key=f"item_{int(item_id)}")
 
+    def item_media(self, item_id: int) -> dict:
+        return self.get(f"/data/wow/media/item/{int(item_id)}", cache_key=f"itemmedia_{int(item_id)}")
+
     def search_items(self, name: str) -> list:
         """[(item_id, name)] whose name equals ``name`` exactly (case-insensitive), via the item search API."""
         wanted = (name or "").strip()

@@ -30,6 +30,7 @@ def render(table: pd.DataFrame) -> None:
 
 def render_hunt(table: pd.DataFrame) -> None:
     recipes = housing.housing_recipes(ui_crafting.load_recipes())
+    infos = ui_crafting.load_item_infos()
     if not recipes:
         st.info("No housing recipes yet. Use *Find & import housing recipes* (needs your Blizzard API key), or give "
                 "your own recipes a category containing 'Housing' or 'Decor'.")
@@ -69,6 +70,7 @@ def render_hunt(table: pd.DataFrame) -> None:
             continue
         res = e.result
         rows.append({
+            "Icon": infos[e.recipe.crafted_item_id].icon_url if e.recipe.crafted_item_id in infos else None,
             "Recipe": e.recipe.name, "Expansion": housing.expansion_of(e.recipe), "Profession": e.recipe.profession,
             "Category": e.recipe.category, "Profit / craft (g)": copper_to_gold(res.profit_per_craft),
             "ROI %": None if res.roi is None else res.roi * 100,
@@ -87,7 +89,11 @@ def render_hunt(table: pd.DataFrame) -> None:
     st.dataframe(frame.drop(columns=["_rank"]), hide_index=True, column_config={
         "Profit / craft (g)": GOLD, "Cost / craft (g)": GOLD, "Sell price (g)": GOLD,
         "ROI %": st.column_config.NumberColumn(format="%.1f"),
-        "Sold / day (TSM)": st.column_config.NumberColumn(format="%.1f")})
+        "Sold / day (TSM)": st.column_config.NumberColumn(format="%.1f"),
+        "Icon": st.column_config.ImageColumn(width="small")})
+    ui_blizzard.render_item_info_refresh(recipes, "house_iteminfo")
+    st.caption("Soulbound reagents (e.g. lumber you gather) are not priced from the AH; give them a time cost on "
+               "*Housing / Crafting -> Stock & costs*.")
     top = frame[frame["Profit / craft (g)"].notna()].head(15)
     if not top.empty:
         st.markdown("**Top housing recipes by profit per craft (g)**")

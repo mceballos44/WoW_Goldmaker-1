@@ -30,6 +30,9 @@ Owner: Deadwalker2000. The repo is PUBLIC - never commit personal data.
 * Inputs the user should not retype: give the widget `value=saved(key, default)` (or `saved_index` /
   `saved_choices`) from `ui_common`; `persist_ui_state()` at the end of `main()` stores them. Do not persist
   prefilled prices or the per-tab AH cut. Manual yields live in `manual_yields`.
+* Item facts (icon, binding, rarity, crafting tier) live in `item_info`; `ui_crafting.load_recipes()` applies them so
+  soulbound reagents are never auctionable. Self-gathered costs: `crafting.resource_costs()` (typed cost wins,
+  then gold-per-hour / units-per-hour). Never infer quality tiers from IDs or names.
 * `TODO.md` - open issues, things to verify, ideas. Keep it current with every change.
 * `tests/` - pytest. `samples/` - FAKE example files only.
 * `data/` - runtime SQLite and cached CSVs; git-ignored.

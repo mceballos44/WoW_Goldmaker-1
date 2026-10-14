@@ -12,7 +12,7 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-from goldmaker import config, crafting, database, pricing, profiles, recipes
+from goldmaker import config, crafting, database, item_info, pricing, profiles, recipes
 from goldmaker.crafting import Mechanics
 from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
 import ui_blizzard
@@ -48,16 +48,33 @@ def render(table: pd.DataFrame) -> None:
 # --- data helpers -----------------------------------------------------------------------------------
 
 def load_recipes() -> list:
+    """Stored recipes, with soulbound reagents (per Blizzard item info) treated as not on the AH."""
     with db() as conn:
-        return [recipes.Recipe.from_row(row) for row in database.list_recipe_rows(conn)]
+        infos = database.load_item_info(conn)
+        return [item_info.apply_to_recipe(recipes.Recipe.from_row(row), infos)
+                for row in database.list_recipe_rows(conn)]
+
+
+def gold_per_hour() -> Optional[float]:
+    """Your time value (gold per hour) from Settings / Stock & costs, or None if not set."""
+    with db() as conn:
+        raw = database.get_setting(conn, crafting.SETTING_GOLD_PER_HOUR)
+    try:
+        return float(raw) if raw not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def load_item_infos() -> dict:
+    with db() as conn:
+        return database.load_item_info(conn)
 
 
 def load_resources() -> tuple:
     """(opportunity cost by item, units on hand by item) in copper / units."""
     with db() as conn:
         df = database.list_item_resources(conn)
-    opportunity = {int(r.item_id): int(r.opportunity_cost_copper)
-                   for r in df.itertuples() if pd.notna(r.opportunity_cost_copper)}
+    opportunity, _ = crafting.resource_costs(df, gold_to_copper(gold_per_hour()) if gold_per_hour() else None)
     on_hand = {int(r.item_id): int(r.on_hand) for r in df.itertuples() if pd.notna(r.on_hand)}
     return opportunity, on_hand
 
@@ -284,8 +301,10 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list, prefix: str 
     mechanics = mechanics_inputs(prefix, profile)
 
     rows, defaults = [], {}
+    infos = load_item_infos()
     for r in recipe.reagents:
         res = index.get(r.item_id)
+        info = infos.get(r.item_id)
         name = r.item_name or res.name or f"item {r.item_id}"
         if r.auctionable:
             default = None if res.is_missing else copper_to_gold(res.copper)
@@ -293,9 +312,11 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list, prefix: str 
         else:
             cost = opportunity.get(r.item_id)
             default = None if cost is None else copper_to_gold(cost)
-            source = "opportunity cost" if cost is not None else "none set (counts as free)"
+            bound = "soulbound - " if info and info.soulbound else ""
+            source = bound + ("your cost (Stock & costs)" if cost is not None else "not on AH, counts as free")
         defaults[r.item_id] = (res, default)
-        rows.append({"Slot": r.slot, "Item ID": r.item_id,
+        rows.append({"Icon": info.icon_url if info else None, "Quality": item_info.badge(r.quality_label, info),
+                     "Slot": r.slot, "Item ID": r.item_id,
                      "Item": name + (f" [{r.quality_label}]" if r.quality_label else ""),
                      "Qty / craft": r.quantity, "Auctionable": r.auctionable,
                      "Price or opportunity cost (g)": default, "Source": source,
@@ -304,8 +325,9 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list, prefix: str 
                 "value is an opportunity cost (leave empty to count it as free).")
     edited = st.data_editor(
         pd.DataFrame(rows), hide_index=True, key=f"{prefix}_editor_{recipe.key}",
-        disabled=["Slot", "Item ID", "Item", "Qty / craft", "Auctionable", "Source", "In stock"],
-        column_config={"Item ID": st.column_config.NumberColumn(format="%d"),
+        disabled=["Icon", "Quality", "Slot", "Item ID", "Item", "Qty / craft", "Auctionable", "Source", "In stock"],
+        column_config={"Icon": st.column_config.ImageColumn(width="small"),
+                       "Item ID": st.column_config.NumberColumn(format="%d"),
                        "Price or opportunity cost (g)": st.column_config.NumberColumn(min_value=0.0, format="%.4f"),
                        "In stock": st.column_config.NumberColumn(format="%d")})
 
@@ -373,11 +395,15 @@ def _render_craft_result(result, recipe, crafts, output_name, defaults, prices, 
         "Cost (g)": GOLD, "Net revenue (g)": GOLD, "Profit (g)": GOLD})
 
     st.markdown("**Reagent breakdown (per craft)**")
+    infos = load_item_infos()
     st.dataframe(pd.DataFrame([{
+        "Icon": infos[l.item_id].icon_url if l.item_id in infos else None,
+        "Quality": item_info.badge(l.quality_label, infos.get(l.item_id)),
         "Item": l.name, "Qty": l.quantity, "Price basis": l.price_basis,
         "Unit (g)": copper_to_gold(l.unit_price_copper), "Line cost (g)": copper_to_gold(l.line_cost_copper),
         "Savings eligible": l.savings_eligible, "In stock": l.on_hand} for l in result.lines]),
-        hide_index=True, column_config={"Unit (g)": GOLD, "Line cost (g)": GOLD})
+        hide_index=True, column_config={"Unit (g)": GOLD, "Line cost (g)": GOLD,
+                                        "Icon": st.column_config.ImageColumn(width="small")})
     st.caption(f"Expected output per craft: {result.output_units:g} x {output_name}"
                + (f" - expected reagent savings {format_gold(result.expected_savings)}"
                   if result.expected_savings else ""))
@@ -501,6 +527,7 @@ def render_recipes(table: pd.DataFrame, index: pricing.PriceIndex, recipe_list: 
             "Reagent lines": len(r.reagents), "Source": r.source} for r in recipe_list]), hide_index=True)
     else:
         st.info("No recipes yet. Import a file, load the example, or add one with the editor below.")
+    ui_blizzard.render_item_info_refresh(recipe_list, "rc_iteminfo")
     _quickstart(index, recipe_list)
     _import_export(index, recipe_list)
     st.divider()
@@ -752,34 +779,63 @@ def render_stock(table: pd.DataFrame) -> None:
                "Mark such a reagent 'auctionable = false' in its recipe, then record your stock here. "
                "Stock caps how many crafts are possible; the opportunity cost is what you could get for one unit "
                "elsewhere. If you set no opportunity cost the item counts as free - and the app says so.")
+    st.markdown("**Your time value** - for items you gather yourself (e.g. soulbound lumber)")
+    current_gph = gold_per_hour()
+    g1, g2 = st.columns([1, 2])
+    new_gph = g1.number_input("Your gold per hour (g)", min_value=0.0, step=100.0, value=current_gph,
+                              placeholder="not set", key="stock_gph",
+                              help="What an hour of your playtime is worth to you, e.g. what your best farm earns.")
+    if new_gph != current_gph:
+        with db() as conn:
+            database.set_setting(conn, crafting.SETTING_GOLD_PER_HOUR, "" if new_gph is None else str(new_gph))
+    g2.caption("An item with *units gathered per hour* then costs gold per hour / units per hour. "
+               "A cost you type for an item always wins.")
+
+    st.markdown("**Add or update an item**")
     picked = item_picker(table, "stock_item", "Item")
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     on_hand = c1.number_input("Units on hand", min_value=0, step=1, value=None, placeholder="not tracked",
                               key="stock_qty")
     cost_g = c2.number_input("Opportunity cost per unit (g)", min_value=0.0, step=0.01, format="%.4f", value=None,
-                             placeholder="none (counts as free)", key="stock_cost")
-    notes = c3.text_input("Notes", key="stock_notes")
+                             placeholder="none", key="stock_cost")
+    rate = c3.number_input("Units you gather per hour", min_value=0.1, step=10.0, value=None,
+                           placeholder="optional", key="stock_rate",
+                           help="For self-gathered items: sets a time cost when no opportunity cost is typed.")
+    notes = c4.text_input("Notes", key="stock_notes")
+    if rate and new_gph:
+        st.caption(f"Time cost: {format_gold(crafting.time_cost_per_unit(gold_to_copper(new_gph), rate))} per unit.")
+    elif rate:
+        st.caption("Set your gold per hour above to turn this into a cost.")
     if picked and st.button("Save item", type="primary", key="stock_save"):
-        with db() as conn:
-            database.upsert_item_resource(
-                conn, picked[0], picked[1], None if on_hand is None else int(on_hand),
-                None if cost_g is None else gold_to_copper(cost_g), notes)
-        st.toast("Saved")
-        st.rerun()
+        try:
+            with db() as conn:
+                database.upsert_item_resource(
+                    conn, picked[0], picked[1], None if on_hand is None else int(on_hand),
+                    None if cost_g is None else gold_to_copper(cost_g), notes, rate)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.toast("Saved")
+            st.rerun()
 
     with db() as conn:
         resources = database.list_item_resources(conn)
     if resources.empty:
         st.info("No items tracked yet.")
         return
+    costs, basis = crafting.resource_costs(resources, gold_to_copper(new_gph) if new_gph else None)
     st.dataframe(pd.DataFrame({
         "Item ID": resources["item_id"], "Name": resources["name"], "On hand": resources["on_hand"],
         "Opportunity cost (g)": resources["opportunity_cost_copper"] / config.COPPER_PER_GOLD,
+        "Gathered / hour": resources["gather_units_per_hour"],
+        "Cost used (g)": [copper_to_gold(costs.get(int(i))) for i in resources["item_id"]],
+        "From": [basis.get(int(i), "none - counts as free") for i in resources["item_id"]],
         "Notes": resources["notes"], "Updated (UTC)": resources["updated_at"]}),
         hide_index=True, column_config={
             "Item ID": st.column_config.NumberColumn(format="%d"),
             "On hand": st.column_config.NumberColumn(format="%d"),
-            "Opportunity cost (g)": st.column_config.NumberColumn(format="%.4f")})
+            "Opportunity cost (g)": st.column_config.NumberColumn(format="%.4f"),
+            "Cost used (g)": st.column_config.NumberColumn(format="%.4f")})
     d1, d2 = st.columns([2, 1])
     to_delete = d1.selectbox("Remove an item", resources["item_id"].tolist(), key="stock_del_id",
                              format_func=lambda i: f"{resources.loc[resources.item_id == i, 'name'].iloc[0] or 'Item'} ({i})")

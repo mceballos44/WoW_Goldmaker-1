@@ -409,6 +409,25 @@ under the preview displays the raw response for any recipe. The API is known to 
 reagents on modern recipes; recipes it cannot describe (no crafted item, no reagents) are listed and skipped,
 never guessed. Downloads are cached in `data/cache/blizzard`.
 
+## Icons, quality badges and soulbound reagents
+
+When recipes are fetched from Blizzard (or with *Update item icons / soulbound info from Blizzard* on the Recipes
+tab and in the Housing finder), the app also reads each reagent's and crafted item's **icon**, **binding** and
+rarity from Blizzard's Item API (cached in `data/cache/blizzard`). Icons appear in the import preview, the
+calculator's reagent tables and the Housing finder. A bronze / silver / gold badge (🥉🥈🥇) is shown when the
+quality tier is known - from the recipe's quality label (Q1/Q2/Q3, bronze/silver/gold) or a quality field in
+Blizzard's data; it is never guessed.
+
+**Soulbound / account-bound reagents** (e.g. lumber you gather) cannot be bought, so they are treated as *not on
+the AH* automatically: the calculation never waits for a price. They cost:
+* the opportunity cost you type on *Housing / Crafting -> Stock & costs*, or
+* a **time cost**: set *Your gold per hour* once and, per item, *Units you gather per hour* - the cost per unit is
+  gold per hour / units per hour (e.g. 3,000 g/h and 150 lumber/h = 20 g per lumber), or
+* nothing, if neither is set - and the result says it was counted as free.
+
+In the import preview a skipped recipe (Blizzard names no crafted item) can still be imported: type the crafted
+item's ID in its *Crafted item ID* cell.
+
 ## How prices are chosen for an item
 
 1. Manual override, if you set one

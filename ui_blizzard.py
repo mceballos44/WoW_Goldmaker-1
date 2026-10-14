@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pandas as pd
 import streamlit as st
 
-from goldmaker import blizzard_api, database
+from goldmaker import blizzard_api, database, item_info
 from goldmaker.blizzard_api import BlizzardAPIError
 from ui_common import db
 
@@ -154,48 +155,113 @@ def _item_finder(client, lookup):
 
 def _fetch_and_import(client, wanted: list, prefix: str, lookup=None) -> None:
     st.caption(f"{len(wanted)} recipe(s) selected. Each is one request the first time; after that they come from "
-               "a local cache (`data/cache/blizzard`).")
+               "a local cache (`data/cache/blizzard`). Item facts (icon, soulbound, quality) are fetched too.")
     refresh = st.checkbox("Re-download instead of using the cache", key=f"{prefix}_refresh")
     if st.button(f"Fetch {len(wanted)} recipe(s)", type="primary", key=f"{prefix}_fetch"):
         today, converted = date.today().isoformat(), []
         find_item = _item_finder(client, lookup)
-        progress = st.progress(0.0)
+        progress = st.progress(0.0, text="Recipes...")
         for n, (prof, tier, cat, rid, rname) in enumerate(wanted, start=1):
+            entry = {"name": rname, "rid": rid, "meta": (prof, tier, cat), "recipe": None, "problems": [],
+                     "notes": [], "reagents": []}
             try:
                 raw = client.recipe(rid, refresh=refresh)
             except BlizzardAPIError as exc:
-                converted.append((rname, None, [str(exc)], [], [], rid))
+                entry["problems"] = [str(exc)]
             else:
                 conv = blizzard_api.recipe_from_api(raw, prof, tier, cat, today, find_item=find_item)
-                converted.append((rname, conv.recipe, conv.problems, conv.notes, conv.reagents, rid))
-            progress.progress(n / len(wanted), text=f"{n} / {len(wanted)}")
+                entry.update(recipe=conv.recipe, problems=conv.problems, notes=conv.notes, reagents=conv.reagents)
+            converted.append(entry)
+            progress.progress(n / len(wanted), text=f"Recipes {n} / {len(wanted)}")
+        ids = {g.item_id for e in converted for g in e["reagents"]}
+        ids |= {e["recipe"].crafted_item_id for e in converted if e["recipe"]}
+        infos, errors = item_info.fetch(client, ids, lambda f: progress.progress(f, text="Item icons and binding..."))
+        with db() as conn:
+            database.save_item_info(conn, infos.values())
+        for e in converted:
+            if e["recipe"] is not None:
+                e["recipe"] = item_info.apply_to_recipe(e["recipe"], infos)
         st.session_state[f"{prefix}_converted"] = converted
+        st.session_state[f"{prefix}_item_errors"] = errors
 
     converted = st.session_state.get(f"{prefix}_converted")
     if not converted:
         return
-    ok = [c for c in converted if c[1] is not None]
-    st.dataframe(pd.DataFrame([{
-        "Recipe": name, "Status": "ready" if recipe else "skipped",
-        "Crafted item ID": recipe.crafted_item_id if recipe else None,
-        "Reagents": ", ".join(f"{g.quantity}x {g.item_name or g.item_id}" for g in reagents),
-        "Problems / notes": "; ".join(problems + notes)}
-        for name, recipe, problems, notes, reagents, _ in converted]),
-        hide_index=True, column_config={"Crafted item ID": st.column_config.NumberColumn(format="%d")})
+    for error in st.session_state.get(f"{prefix}_item_errors", [])[:5]:
+        st.caption(f"Item info: {error}")
+    with db() as conn:
+        infos = database.load_item_info(conn)
+
+    def reagent_text(reagents) -> str:
+        parts = []
+        for g in reagents:
+            info = infos.get(g.item_id)
+            bound = " (soulbound)" if info and info.soulbound else ""
+            parts.append(f"{g.quantity}x {item_info.badge(g.quality_label, info)}{g.item_name or g.item_id}{bound}")
+        return ", ".join(parts)
+
+    frame = pd.DataFrame([{
+        "Icon": (infos.get(e["recipe"].crafted_item_id).icon_url
+                 if e["recipe"] and infos.get(e["recipe"].crafted_item_id) else None),
+        "Recipe": e["name"], "Status": "ready" if e["recipe"] else "skipped",
+        "Crafted item ID": e["recipe"].crafted_item_id if e["recipe"] else None,
+        "Reagents": reagent_text(e["recipe"].reagents if e["recipe"] else e["reagents"]),
+        "Problems / notes": "; ".join(e["problems"] + e["notes"])} for e in converted])
+    st.markdown("**Preview** - for a skipped recipe you can type the crafted item ID (look the item up in game or "
+                "on the AH) and it is imported too.")
+    edited = st.data_editor(frame, hide_index=True, key=f"{prefix}_preview_editor",
+                            disabled=["Icon", "Recipe", "Status", "Reagents", "Problems / notes"],
+                            column_config={"Icon": st.column_config.ImageColumn(width="small"),
+                                           "Crafted item ID": st.column_config.NumberColumn(min_value=1, step=1,
+                                                                                            format="%d")})
+    ready = []
+    for e, (_, row) in zip(converted, edited.iterrows()):
+        if e["recipe"] is not None:
+            ready.append(e["recipe"])
+        elif pd.notna(row["Crafted item ID"]) and e["reagents"]:
+            typed = int(row["Crafted item ID"])
+            raw = client.recipe(e["rid"])
+            conv = blizzard_api.recipe_from_api(raw, *e["meta"], date.today().isoformat(),
+                                                find_item=lambda _n, i=typed: [(i, None)])
+            if conv.recipe is not None:
+                ready.append(item_info.apply_to_recipe(replace(conv.recipe, notes=(
+                    conv.recipe.notes + "; " if conv.recipe.notes else "") + "Crafted item ID typed by the user."),
+                    infos))
+    soulbound = sum(1 for r in ready for g in r.reagents if not g.auctionable)
+    st.caption(f"{len(ready)} ready, {len(converted) - len(ready)} skipped. {soulbound} soulbound reagent line(s) are "
+               "marked as not on the AH (they cost nothing unless you set an opportunity cost on *Stock & costs*). "
+               "Importing replaces recipes with the same key (bnet-<recipe id>), so re-importing updates them.")
     with st.expander("Show what Blizzard sent for one recipe (to check or report a problem)"):
-        options = {f"{c[0]} (recipe {c[5]})": c[5] for c in converted}
+        options = {f"{e['name']} (recipe {e['rid']})": e["rid"] for e in converted}
         pick = st.selectbox("Recipe", list(options), key=f"{prefix}_raw_pick")
         try:
             st.json(client.recipe(options[pick]))
         except BlizzardAPIError as exc:
             st.error(str(exc))
         st.caption("Copy this into the chat if a recipe is skipped or looks wrong - it contains no personal data.")
-    st.caption(f"{len(ok)} ready, {len(converted) - len(ok)} skipped. Importing replaces recipes with the same key "
-               "(bnet-<recipe id>), so re-importing updates them.")
-    if ok and st.button(f"Import {len(ok)} recipe(s)", type="primary", key=f"{prefix}_import"):
+    if ready and st.button(f"Import {len(ready)} recipe(s)", type="primary", key=f"{prefix}_import"):
         with db() as conn:
-            for _, recipe, *_ in ok:
+            for recipe in ready:
                 database.save_recipe(conn, recipe)
         st.session_state.pop(f"{prefix}_converted", None)
-        st.success(f"Imported {len(ok)} recipe(s). Check a few quantities in game and set a last-verified date on "
+        st.success(f"Imported {len(ready)} recipe(s). Check a few quantities in game and set a last-verified date on "
                    "the Recipes tab.")
+
+
+def render_item_info_refresh(recipe_list: list, key: str) -> None:
+    """Button: fetch icons / soulbound / quality for every reagent and crafted item of the given recipes."""
+    ids = {g.item_id for r in recipe_list for g in r.reagents} | {r.crafted_item_id for r in recipe_list}
+    client_id, secret = _credentials()
+    if not ids or not (client_id and secret):
+        return
+    if st.button(f"Update item icons / soulbound info from Blizzard ({len(ids)} items)", key=key):
+        progress = st.progress(0.0)
+        try:
+            infos, errors = item_info.fetch(_client(), ids, progress.progress)
+        except BlizzardAPIError as exc:
+            st.error(str(exc))
+            return
+        with db() as conn:
+            database.save_item_info(conn, infos.values())
+        st.success(f"Updated {len(infos)} item(s); {sum(i.soulbound for i in infos.values())} are soulbound / "
+                   "account-bound and are treated as not on the AH." + (f" {len(errors)} failed." if errors else ""))
