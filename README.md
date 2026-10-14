@@ -276,6 +276,24 @@ units_used, performed_at, notes, output_item_id, output_name, quantity`; rows sh
 edited and imported back; experiments already stored are skipped so nothing is double-counted.
 Download the empty template from the same tab.
 
+## Recipes from the Blizzard API (housing and more)
+
+*Housing / Crafting -> Import from Blizzard API* reads recipes from Blizzard's official Game Data API.
+
+1. Create a client at develop.battle.net -> API Access (free) and paste the **client ID** and **secret** into
+   *Settings -> Blizzard API*, then **Save and test**. They are stored only in your local database
+   (`data/`, git-ignored).
+2. **Search every profession for housing categories** looks through each profession's newest skill tier for
+   category names containing words like *decor* / *furnish* / *housing* (editable - the real category names
+   come from the API; if nothing matches, use **Browse one profession** to see them).
+3. Tick the categories, **Fetch**, review the preview, **Import**.
+
+Imported recipes get the key `bnet-<recipe id>` (re-importing updates them), source
+"Blizzard Game Data API (date)", the profession, skill tier and category, and **no last-verified date** - so
+they are flagged as unverified until you check them. The API is known to leave out optional / quality
+reagents on modern recipes; recipes it cannot describe (no crafted item, no reagents) are listed and skipped,
+never guessed. Downloads are cached in `data/cache/blizzard`.
+
 ## How prices are chosen for an item
 
 1. Manual override, if you set one
@@ -320,6 +338,7 @@ goldmaker/              logic only - no Streamlit imports
   wow_files.py          finds CharExporter.lua on disk
   profiles.py           merged profession profiles for calculators
   conversion.py         input item -> outputs maths, yield calibration, reference yields
+  blizzard_api.py       Blizzard Game Data API client + recipe conversion
   auto_import.py        automatic CharExporter import (runs on every app start / refresh)
   milling.py            herb-named layer over conversion.py
   recipes.py            recipe model, validation, CSV/JSON import and export
@@ -335,6 +354,7 @@ ui_profession.py        Jewelcrafting and Alchemy tabs
 ui_scanner.py           Opportunities tab
 ui_investment.py        AH Investment tab
 ui_excel.py             Import / Export tab
+ui_blizzard.py          Blizzard API credentials (Settings) and recipe import
 ui_profiles.py          Character Profiles tab
 ui_common.py            shared widgets (item picker, db connection)
 TODO.md                 open issues, things to verify, ideas

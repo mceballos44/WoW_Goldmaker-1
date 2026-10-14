@@ -3,3 +3,4 @@ __pycache__/
 .pytest_cache/
 data/*.sqlite3
 data/cache/*.csv
+data/cache/blizzard/

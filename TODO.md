@@ -5,6 +5,14 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 ## Verify with real data (needs you, on your PC)
 
+- [ ] **Reset the Blizzard client secret** on develop.battle.net (it was pasted into a chat), then paste the new
+      one in *Settings -> Blizzard API* and press **Save and test**.
+- [ ] **Blizzard API importer, first live run.** Built against the documented endpoints but never run against
+      the live API (the cloud session's network blocks battle.net). Try *Housing / Crafting -> Import from
+      Blizzard API -> Search*. Tell me the housing category names it finds (or that it finds none), and compare
+      2-3 imported housing recipes with the game. Unknown: whether housing decor recipes are in the API at all,
+      and under which category names.
+
 - [ ] **First real run on Windows.** `git pull`, then `.venv\Scripts\python.exe -m pip install -r requirements.txt`
       and start the app (Ctrl+Shift+B). Send screenshots / tracebacks of anything that breaks.
 - [ ] **Database upgrade.** The first start of this version adds columns to your existing
@@ -36,10 +44,6 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 ## Ideas / not built yet
 
-- [ ] **Blizzard Game Data API recipe import** (user is creating a client at develop.battle.net). Plan: client
-      ID / secret entered in Settings and stored only in `data/` (git-ignored); import recipes per profession /
-      skill tier with reagents and quantities, recording source = "Blizzard API" and the date. Check what the
-      API gives for quality-tier item IDs and housing recipes before relying on it.
 - [ ] Optional: Blizzard Profile API for alts' professions (no Multicraft / Resourcefulness there).
 
 - [ ] Remember quality-tier odds per profile + recipe (today they are typed per calculation).
@@ -51,6 +55,9 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 - [ ] Dashboard charts across calculators (today each calculator has its own charts).
 
 ## Done
+
+- [x] 2026-10-14 Blizzard Game Data API recipe import (housing category search + browse), credentials stored
+      locally, recipes imported as unverified with source and date; cache in `data/cache/blizzard` (git-ignored).
 
 - [x] 2026-10-13 Automatic character import: CharExporter.lua is checked on every app run and imported when
       WoW rewrote it (logout / reload). Same safety rules as manual import.

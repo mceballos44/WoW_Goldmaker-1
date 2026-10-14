@@ -22,6 +22,8 @@ Owner: Deadwalker2000. The repo is PUBLIC - never commit personal data.
   and keep reliability `reference` so every result says so. Do not scrape Wowhead.
 * Character auto-import (`goldmaker/auto_import.py`) runs on every app run; it must stay read-only on the WoW
   folder and keep the snapshot-ordering rules.
+* Blizzard API (`goldmaker/blizzard_api.py`): credentials only in the settings table (local DB), never in files.
+  Imported recipes stay unverified (no `last_verified`) and report gaps instead of guessing.
 * `TODO.md` - open issues, things to verify, ideas. Keep it current with every change.
 * `tests/` - pytest. `samples/` - FAKE example files only.
 * `data/` - runtime SQLite and cached CSVs; git-ignored.

@@ -15,6 +15,7 @@ import streamlit as st
 from goldmaker import config, crafting, database, pricing, profiles, recipes
 from goldmaker.crafting import Mechanics
 from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
+import ui_blizzard
 from ui_common import db, default_ah_cut_pct, item_picker
 
 GOLD = st.column_config.NumberColumn(format="%.2f")
@@ -30,14 +31,16 @@ def render(table: pd.DataFrame) -> None:
                "or type them in - nothing about reagents or quantities is built into this app.")
     index = pricing.PriceIndex(table)
     recipe_list = load_recipes()
-    tab_compare, tab_calc, tab_recipes, tab_stock = st.tabs(
-        ["Compare recipes", "Calculator", "Recipes", "Stock & costs"])
+    tab_compare, tab_calc, tab_recipes, tab_bnet, tab_stock = st.tabs(
+        ["Compare recipes", "Calculator", "Recipes", "Import from Blizzard API", "Stock & costs"])
     with tab_compare:
         render_compare(index, recipe_list)
     with tab_calc:
         render_calculator(index, recipe_list)
     with tab_recipes:
         render_recipes(table, index, recipe_list)
+    with tab_bnet:
+        ui_blizzard.render_import()
     with tab_stock:
         render_stock(table)
 

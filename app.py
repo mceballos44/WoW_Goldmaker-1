@@ -18,6 +18,7 @@ import pandas as pd
 import streamlit as st
 
 from goldmaker import config, database, pricing, tsm_client
+import ui_blizzard
 import ui_crafting
 import ui_excel
 import ui_investment
@@ -387,6 +388,8 @@ def render_settings() -> None:
             database.set_setting(conn, "ah_cut_pct", str(cut))
         st.toast("Saved")
     st.caption("5% is the standard retail AH commission as I understand it - verify it in game.")
+    st.divider()
+    ui_blizzard.render_settings()
 
 
 # --- Main --------------------------------------------------------------------------------
