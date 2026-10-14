@@ -16,7 +16,7 @@ import streamlit as st
 
 from goldmaker import conversion, database, pricing, scanner
 from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
-from ui_common import db, default_ah_cut_pct, item_picker, reliability_badge
+from ui_common import db, default_ah_cut_pct, item_picker, reliability_badge, saved, saved_index
 
 MODE_CALIBRATED = "Calibrated from my experiments"
 MODE_REFERENCE = "Reference yields (outside data)"
@@ -78,12 +78,20 @@ def _known_inputs(spec: ProcessSpec) -> pd.DataFrame:
     with db() as conn:
         inputs = database.list_experiment_inputs(conn, spec.process)
         refs = database.list_reference_inputs(conn, spec.process)
+        manual = database.list_manual_inputs(conn, spec.process)
+    frames = [inputs] if not inputs.empty else []
     extra = refs[~refs["input_item_id"].isin(inputs["herb_item_id"])]
-    if extra.empty:
+    if not extra.empty:
+        frames.append(pd.DataFrame({"herb_item_id": extra["input_item_id"], "herb_name": extra["input_name"],
+                                    "experiments": 0, "total_herbs": 0, "kind": "reference yields only"}))
+    known = set(inputs["herb_item_id"]) | set(refs["input_item_id"])
+    manual = manual[~manual["input_item_id"].isin(known)]
+    if not manual.empty:
+        frames.append(pd.DataFrame({"herb_item_id": manual["input_item_id"], "herb_name": None,
+                                    "experiments": 0, "total_herbs": 0, "kind": "manual yields only"}))
+    if not frames:
         return inputs
-    extra = pd.DataFrame({"herb_item_id": extra["input_item_id"], "herb_name": extra["input_name"],
-                          "experiments": 0, "total_herbs": 0})
-    return pd.concat([inputs, extra], ignore_index=True) if not inputs.empty else extra
+    return pd.concat(frames, ignore_index=True)
 
 
 def _reference(spec: ProcessSpec, input_id: int) -> conversion.YieldSummary:
@@ -95,18 +103,27 @@ def _choose_input(spec: ProcessSpec, table: pd.DataFrame, inputs: pd.DataFrame) 
     p = spec.prefix
     options = ["Search all items"]
     if not inputs.empty:
-        options.insert(0, f"{spec.units.title()} with experiments or reference yields")
+        options.insert(0, f"{spec.units.title()} with saved yields")
     # The key changes when experiments first exist, so that default takes effect.
-    source = st.radio(spec.unit_title, options, horizontal=True,
-                      key=f"{p}_src_{'exp' if not inputs.empty else 'none'}")
+    src_key = f"{p}_src_{'exp' if not inputs.empty else 'none'}"
+    source = st.radio(spec.unit_title, options, horizontal=True, key=src_key,
+                      index=saved_index(src_key, options))
     if source != "Search all items":
         labels = {
             (f"{r.herb_name or spec.unit_title} ({r.herb_item_id}) - "
              + (f"{r.experiments} experiment(s), {int(r.total_herbs)} {spec.units}" if r.experiments
-                else "reference yields only")): (int(r.herb_item_id), r.herb_name)
+                else getattr(r, "kind", None) or "reference yields only")):
+            (int(r.herb_item_id), r.herb_name if isinstance(r.herb_name, str) else None)
             for r in inputs.itertuples()
         }
-        return labels[st.selectbox(spec.unit_title, list(labels), key=f"{p}_input_exp")]
+        # Labels contain counts that change, so the last choice is remembered by item ID.
+        last_key = f"{p}_last_input_id"
+        ids = [v[0] for v in labels.values()]
+        last = saved(last_key)
+        pick = st.selectbox(spec.unit_title, list(labels), key=f"{p}_input_exp",
+                            index=ids.index(last) if last in ids else 0)
+        st.session_state[last_key] = labels[pick][0]
+        return labels[pick]
     return item_picker(table, f"{p}_input", spec.unit_title)
 
 
@@ -139,7 +156,12 @@ def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
                 + ("Reference yields are available, or enter yields by hand. " if reference.estimates
                    else "Enter yields by hand below, add reference yields, or ")
                 + "record an experiment on the *Experiments* tab.")
-    mode = st.radio("Yield source", modes, horizontal=True, key=f"{p}_mode_{input_id}_{len(modes)}")
+    with db() as conn:
+        manual_saved = database.list_manual_yields(conn, spec.process, input_id)
+    mode_key = f"{p}_mode_{input_id}_{len(modes)}"
+    default_mode = modes.index(MODE_MANUAL) if manual_saved and not calibrated.n_experiments else 0
+    mode = st.radio("Yield source", modes, horizontal=True, key=mode_key,
+                    index=saved_index(mode_key, modes, default_mode))
     summary = reference if mode == MODE_REFERENCE else calibrated
     if mode == MODE_MANUAL and not calibrated.estimates:
         summary = reference                       # start manual yields from the reference numbers
@@ -152,7 +174,8 @@ def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
 
     reset = st.session_state.get(f"{p}_reset", 0)
     c1, c2, c3, c4, c5 = st.columns(5)
-    quantity = int(c1.number_input(f"{spec.units.title()} to {spec.verb}", min_value=1, value=100, step=10, key=f"{p}_qty_{input_id}"))
+    quantity = int(c1.number_input(f"{spec.units.title()} to {spec.verb}", min_value=1, step=10,
+                                   value=saved(f"{p}_qty_{input_id}", 100), key=f"{p}_qty_{input_id}"))
     default_g = (copper_to_gold(input_price.copper)
                  if input_price is not None and not input_price.is_missing else None)
     price_g = c2.number_input(f"{spec.unit_title} price (g each)", min_value=0.0, value=default_g, step=0.01,
@@ -162,17 +185,20 @@ def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
     ah_cut_pct = c3.number_input("AH cut (%)", min_value=0.0, max_value=99.0, value=default_ah_cut_pct(),
                                  step=0.5, key=f"{p}_ahcut")
     sell_through_pct = c4.number_input("Expected sell-through (%)", min_value=0.0, max_value=100.0,
-                                       value=100.0, step=5.0, key=f"{p}_sellthrough",
+                                       value=saved(f"{p}_sellthrough", 100.0), step=5.0, key=f"{p}_sellthrough",
                                        help="Share of the output you expect to actually sell. Unsold items count as 0.")
-    target_roi_pct = c5.number_input("Target ROI (%)", min_value=-99.0, value=0.0, step=5.0,
+    target_roi_pct = c5.number_input("Target ROI (%)", min_value=-99.0, value=saved(f"{p}_targetroi", 0.0),
+                                     step=5.0,
                                      key=f"{p}_targetroi",
                                      help="Used for the maximum purchase price. 0 means break-even.")
     e1, e2, _ = st.columns([1, 1, 3])
     extra_g = 0.0
     if spec.extra_cost_help:
-        extra_g = e1.number_input(f"Other cost per {spec.unit} (g)", min_value=0.0, value=0.0, step=0.01,
+        extra_g = e1.number_input(f"Other cost per {spec.unit} (g)", min_value=0.0, step=0.01,
+                                  value=saved(f"{p}_extra_{input_id}", 0.0),
                                   format="%.4f", key=f"{p}_extra_{input_id}", help=spec.extra_cost_help)
-    per_op = e2.number_input(f"{spec.units.title()} per {spec.operation}", min_value=1, value=None, step=1, placeholder="optional",
+    per_op = e2.number_input(f"{spec.units.title()} per {spec.operation}", min_value=1, step=1,
+                             value=saved(f"{p}_perop_{input_id}"), placeholder="optional",
                              key=f"{p}_perop_{input_id}",
                              help=f"How many {spec.units} one {spec.operation} uses - check in game. Only used "
                                   f"for the 'per {spec.operation}' figures; leave empty to skip them.")
@@ -187,7 +213,12 @@ def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
     extra_key = f"{p}_extra_outputs_{input_id}"
     extra = st.session_state.setdefault(extra_key, [])
     rows, seen = [], set()
-    for est in summary.estimates:
+    if mode == MODE_MANUAL and manual_saved:      # yields typed earlier, kept in the database
+        for m in manual_saved:
+            rows.append({"id": m["output_item_id"], "name": m["output_name"], "yield": m["yield_per_unit"],
+                         "lo": None, "hi": None})
+            seen.add(m["output_item_id"])
+    for est in summary.estimates if not (mode == MODE_MANUAL and manual_saved) else ():
         rows.append({"id": est.item_id, "name": est.name, "yield": est.mean_per_unit,
                      "lo": est.ci_low, "hi": est.ci_high})
         seen.add(est.item_id)
@@ -238,6 +269,9 @@ def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
         })
 
     yields = {int(r["Item ID"]): float(r[yield_col] or 0.0) for _, r in edited.iterrows()}
+    if mode == MODE_MANUAL:
+        _remember_manual_yields(spec, input_id, edited, yield_col, manual_saved,
+                                {r["id"]: r["yield"] for r in rows})
     prices = {int(r["Item ID"]): (gold_to_copper(r["Price (g)"]) if pd.notna(r["Price (g)"]) else None)
               for _, r in edited.iterrows()}
     names = {int(r["Item ID"]): r["Item"] for _, r in edited.iterrows()}
@@ -255,6 +289,25 @@ def render_calculator(spec: ProcessSpec, table: pd.DataFrame) -> None:
 
     _render_results(spec, result, summary, mode, quantity, names, defaults, edited, prices,
                     target_roi_pct, per_op)
+
+
+def _remember_manual_yields(spec, input_id: int, edited: pd.DataFrame, yield_col: str, stored: list,
+                            shown: dict) -> None:
+    """Save manual yields once the user has changed them, so they survive closing the app.
+
+    ``shown`` are the yields the table started with; merely opening manual mode saves nothing.
+    """
+    rows = [{"item_id": int(r["Item ID"]), "name": r["Item"], "yield_per_unit": float(r[yield_col] or 0.0)}
+            for _, r in edited.iterrows()]
+    before = {m["output_item_id"]: m["yield_per_unit"] for m in stored}
+    now = {r["item_id"]: r["yield_per_unit"] for r in rows}
+    edited_by_user = now != {k: float(v or 0.0) for k, v in shown.items()}
+    if (edited_by_user or (stored and now != before)) and any(now.values()):
+        with db() as conn:
+            database.save_manual_yields(conn, spec.process, input_id, rows)
+        st.caption("Manual yields saved - they will be here next time.")
+    elif stored:
+        st.caption("Manual yields are saved and reloaded automatically.")
 
 
 def _render_results(spec, result, summary, mode, quantity, names, defaults, edited, prices,
@@ -506,8 +559,10 @@ def render_compare(spec: ProcessSpec, table: pd.DataFrame) -> None:
                "only reference yields uses those and says so in the Reliability column.")
     c1, c2, c3 = st.columns(3)
     ah_cut = c1.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key=f"{p}_ahcut")
-    sell = c2.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0, key=f"{p}_sell")
-    quantity = int(c3.number_input(f"{spec.units.title()} per comparison", min_value=1, value=100, step=10,
+    sell = c2.number_input("Expected sell-through (%)", 0.0, 100.0, value=saved(f"{p}_sell", 100.0), step=5.0,
+                           key=f"{p}_sell")
+    quantity = int(c3.number_input(f"{spec.units.title()} per comparison", min_value=1,
+                                   value=saved(f"{p}_qty", 100), step=10,
                                    key=f"{p}_qty"))
     index = pricing.PriceIndex(table)
     rows = []
@@ -531,6 +586,10 @@ def render_compare(spec: ProcessSpec, table: pd.DataFrame) -> None:
             "Experiments": summary.n_experiments, "Reliability": reliability_badge(summary.reliability),
             "Flags": "; ".join(f for f in opp.flags if not f.startswith("operation size")),
         })
+    if not rows:
+        st.info(f"No {spec.unit} has experiments or reference yields yet - manual yields are used in the "
+                "Calculator only.")
+        return
     frame = pd.DataFrame(rows).sort_values(f"Profit per {spec.unit} (g)", ascending=False, na_position="last")
     st.dataframe(frame, hide_index=True, column_config={
         "Item ID": st.column_config.NumberColumn(format="%d"),

@@ -7,7 +7,7 @@ import streamlit as st
 
 from goldmaker import excel_io, investment, pricing
 from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
-from ui_common import default_ah_cut_pct, item_picker
+from ui_common import default_ah_cut_pct, item_picker, saved
 
 GOLD = st.column_config.NumberColumn(format="%.2f")
 
@@ -26,19 +26,23 @@ def render(table: pd.DataFrame, context: dict) -> None:
     buy_g = c1.number_input("Current (buy) price, g each", min_value=0.0, step=0.01, format="%.4f",
                             value=None if current is None or current.is_missing else copper_to_gold(current.copper),
                             placeholder="enter a price", key=f"inv_buy_{tag}")
-    quantity = int(c2.number_input("Quantity", min_value=1, value=100, step=10, key="inv_qty"))
-    other_g = c3.number_input("Deposits lost / other costs (g, total)", min_value=0.0, value=0.0, step=1.0,
+    quantity = int(c2.number_input("Quantity", min_value=1, value=saved("inv_qty", 100), step=10, key="inv_qty"))
+    other_g = c3.number_input("Deposits lost / other costs (g, total)", min_value=0.0, value=saved("inv_other", 0.0),
+                              step=1.0,
                               key="inv_other", help="Re-listing costs, lost deposits, anything else - one total.")
     ah_cut = c4.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key="inv_ahcut")
     if current is not None and not current.is_missing:
         st.caption(f"Buy price prefilled from {current.source}" + (" (data may be stale)" if current.is_stale else ""))
 
     d1, d2, d3 = st.columns(3)
-    expected_g = d1.number_input("Expected future price (g each, baseline)", min_value=0.0, value=None,
+    expected_g = d1.number_input("Expected future price (g each, baseline)", min_value=0.0,
+                                 value=saved("inv_expected"),
                                  step=0.01, format="%.4f", placeholder="your estimate", key="inv_expected")
-    sell_pct = d2.number_input("Expected sell-through (%)", 0.0, 100.0, value=80.0, step=5.0, key="inv_sell",
+    sell_pct = d2.number_input("Expected sell-through (%)", 0.0, 100.0, value=saved("inv_sell", 80.0), step=5.0,
+                               key="inv_sell",
                                help="Share of the units you expect to sell. Unsold units count as 0.")
-    spread_pct = d3.number_input("Bearish / bullish spread (+/- %)", 0.0, 95.0, value=20.0, step=5.0,
+    spread_pct = d3.number_input("Bearish / bullish spread (+/- %)", 0.0, 95.0, value=saved("inv_spread", 20.0),
+                                 step=5.0,
                                  key="inv_spread", help="Your own choice of how far the other scenarios sit "
                                                         "below/above the baseline. Edit each one below.")
     if buy_g is None or expected_g is None:

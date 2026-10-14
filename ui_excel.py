@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from goldmaker import excel_io, pricing
-from ui_common import db, default_ah_cut_pct
+from ui_common import db, default_ah_cut_pct, saved
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -21,7 +21,8 @@ def render(table: pd.DataFrame, context: dict) -> None:
     c1, c2 = st.columns(2)
     ah_cut = c1.number_input("AH cut for the crafting sheet (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5,
                              key="xl_ahcut")
-    sell = c2.number_input("Sell-through for the crafting sheet (%)", 0.0, 100.0, value=100.0, step=5.0,
+    sell = c2.number_input("Sell-through for the crafting sheet (%)", 0.0, 100.0, value=saved("xl_sell", 100.0),
+                           step=5.0,
                            key="xl_sell")
     if st.button("Build export", type="primary", key="xl_build"):
         with db() as conn:

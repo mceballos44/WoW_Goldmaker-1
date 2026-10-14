@@ -28,6 +28,7 @@ import ui_profession
 import ui_profiles
 import ui_prospecting
 import ui_scanner
+from ui_common import persist_ui_state, saved
 from goldmaker.currency import format_gold, gold_to_copper
 
 st.set_page_config(page_title="WoW Goldmaker", page_icon="💰", layout="wide")
@@ -140,14 +141,15 @@ def render_sidebar() -> tuple[str, str, str]:
 
     st.sidebar.markdown("**Datasets to refresh**")
     chosen = [scope for scope in config.SCOPES
-              if st.sidebar.checkbox(SCOPE_LABELS[scope], value=scope != "region",
+              if st.sidebar.checkbox(SCOPE_LABELS[scope], value=saved(f"fetch_{scope}", scope != "region"),
                                      key=f"fetch_{scope}")]
     with db() as conn:
         bnet_id = database.get_setting(conn, blizzard_api.SETTING_ID, "")
         bnet_secret = database.get_setting(conn, blizzard_api.SETTING_SECRET, "")
     if bnet_id and bnet_secret:
         chosen += [scope for scope in config.BNET_SCOPES
-                   if st.sidebar.checkbox(SCOPE_LABELS[scope], value=True, key=f"fetch_{scope}")]
+                   if st.sidebar.checkbox(SCOPE_LABELS[scope], value=saved(f"fetch_{scope}", True),
+                                          key=f"fetch_{scope}")]
     else:
         st.sidebar.caption("Add your Blizzard API key in Settings to also download Blizzard's own AH listings.")
 
@@ -463,5 +465,6 @@ def main() -> None:
         ui_excel.render(table, context)
     with tabs["Settings"]:
         render_settings()
+    persist_ui_state()          # remember calculator / filter inputs for the next time the app opens
 
 main()

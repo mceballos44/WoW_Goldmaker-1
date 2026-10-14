@@ -279,6 +279,23 @@ units_used, performed_at, notes, output_item_id, output_name, quantity`; rows sh
 edited and imported back; experiments already stored are skipped so nothing is double-counted.
 Download the empty template from the same tab.
 
+## Closing and reopening the app
+
+Everything is saved in `data/goldmaker.sqlite3` on your PC, so the app reopens the way you left it:
+
+* **Saved as you go:** prices and overrides, characters and profession stats, experiments, reference yields,
+  **manual yields** (typed in the calculator's *Manual yields* mode - saved as soon as you change one, reloaded
+  next time, and that herb / ore stays in the quick-pick list), recipes, quality tiers, stock, settings, the
+  Blizzard key, the WoW folder.
+* **Remembered inputs:** quantities, sell-through, target ROI, ore per prospect / herbs per mill, other costs,
+  chosen herb / ore / recipe / character profile, Resourcefulness / Multicraft fields, quality-tier odds,
+  investment inputs, filters (Compare, Opportunities, Housing finder) and the sidebar refresh boxes.
+* **Fresh each time, on purpose:** item prices in the calculators are prefilled from the current price data
+  (a price you edit there is for that calculation only - use a manual override to keep one), and the AH cut
+  comes from *Settings* so one change applies everywhere.
+
+To start over, delete `data/goldmaker.sqlite3` while the app is closed (this removes everything above).
+
 ## Less typing: what comes in automatically
 
 | Data | Source | How |

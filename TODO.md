@@ -61,7 +61,6 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 - [ ] Optional: Blizzard Profile API for alts' professions (no Multicraft / Resourcefulness there).
 
-- [ ] Remember quality-tier odds per profile + recipe (today they are typed per calculation).
 - [ ] Save investment scenarios in the database (today: Excel download only).
 - [ ] Ingenuity and concentration modelling - only once you have measured how they behave.
 - [ ] Price impact of selling many units (today: linear revenue + a liquidity warning).
@@ -70,6 +69,9 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 - [ ] Dashboard charts across calculators (today each calculator has its own charts).
 
 ## Done
+
+- [x] 2026-10-14 App reopens as it was left: manual yields saved per herb/ore (only once edited), and calculator /
+      filter inputs remembered in the database (`ui_common.saved` + `persist_ui_state`). Prices stay fresh.
 
 - [x] 2026-10-14 Blizzard AH prices (commodities + realm), Battle.net sign-in / by-name character import with
       profession tiers and known recipes, Housing finder (all expansions, Legion default, who can craft),

@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from goldmaker import auto_import, blizzard_api, blizzard_profile, charexporter, database, profiles, tsm_client, wow_files
+from ui_common import saved
 
 SOURCE_DISK = "Read SavedVariables from this PC (all alts)"
 SOURCE_UPLOAD = "Upload a file"
@@ -546,7 +547,7 @@ def render_battlenet() -> None:
     redirect = st.text_input("Redirect URL", value=_redirect_uri(), key="cp_bnet_redirect",
                              help="Add exactly this address under *Redirect URLs* of your client on develop.battle.net. "
                                   "It is where Battle.net sends you back after signing in.")
-    st.number_input("Skip characters below level", 1, 90, value=10, key="cp_bnet_minlevel")
+    st.number_input("Skip characters below level", 1, 90, value=saved("cp_bnet_minlevel", 10), key="cp_bnet_minlevel")
     if st.button("Prepare sign-in link", key="cp_bnet_prepare"):
         state = blizzard_profile.new_state()
         with db() as conn:

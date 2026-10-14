@@ -16,7 +16,7 @@ from goldmaker import config, crafting, database, pricing, profiles, recipes
 from goldmaker.crafting import Mechanics
 from goldmaker.currency import copper_to_gold, format_gold, gold_to_copper
 import ui_blizzard
-from ui_common import db, default_ah_cut_pct, item_picker
+from ui_common import db, default_ah_cut_pct, item_picker, saved, saved_choices, saved_index
 
 GOLD = st.column_config.NumberColumn(format="%.2f")
 CHEAPEST = "Cheapest priced"
@@ -79,9 +79,11 @@ def profile_picker(prefix: str, profession: Optional[str] = None):
                    + " - import one on *Character Profiles* to prefill your stats.")
         return None
     labels = [NO_PROFILE] + [f"{c} - {p}" for c, p in choices]
+    last = saved(f"{prefix}_profile_label")
     pick = st.selectbox("Character profile", range(len(labels)), format_func=lambda i: labels[i],
-                        key=f"{prefix}_profile",
+                        key=f"{prefix}_profile", index=labels.index(last) if last in labels else 0,
                         help="Prefills Resourcefulness / Multicraft from the stats saved on Character Profiles.")
+    st.session_state[f"{prefix}_profile_label"] = labels[pick]      # remembered by name, not position
     if pick == 0:
         return None
     with db() as conn:
@@ -109,13 +111,17 @@ def mechanics_inputs(prefix: str, profile=None) -> Mechanics:
                    "Multicraft only adds output. The two effects are applied separately, never added together. "
                    "Ingenuity and concentration are not modelled.")
         c1, c2, c3, c4 = st.columns(4)
-        rc = c1.number_input("Resourcefulness chance (%)", 0.0, 100.0, value=pre.get("rc"), step=1.0,
+        rc = c1.number_input("Resourcefulness chance (%)", 0.0, 100.0, value=saved(f"{prefix}_rc_{tag}", pre.get("rc")),
+                             step=1.0,
                              placeholder="off", key=f"{prefix}_rc_{tag}")
-        rs = c2.number_input("Share of eligible reagents saved (%)", 0.0, 100.0, value=pre.get("rs"), step=1.0,
+        rs = c2.number_input("Share of eligible reagents saved (%)", 0.0, 100.0,
+                             value=saved(f"{prefix}_rs_{tag}", pre.get("rs")), step=1.0,
                              placeholder="off", key=f"{prefix}_rs_{tag}")
-        mc = c3.number_input("Multicraft chance (%)", 0.0, 100.0, value=pre.get("mc"), step=1.0,
+        mc = c3.number_input("Multicraft chance (%)", 0.0, 100.0, value=saved(f"{prefix}_mc_{tag}", pre.get("mc")),
+                             step=1.0,
                              placeholder="off", key=f"{prefix}_mc_{tag}")
-        me = c4.number_input("Extra output on proc (% of base)", 0.0, value=pre.get("me"), step=5.0,
+        me = c4.number_input("Extra output on proc (% of base)", 0.0, value=saved(f"{prefix}_me_{tag}", pre.get("me")),
+                             step=5.0,
                              placeholder="off", key=f"{prefix}_me_{tag}")
         if profile is not None:
             _, notes = crafting.mechanics_from_profile(profile)
@@ -142,18 +148,22 @@ def render_compare(index: pricing.PriceIndex, recipe_list: list, prefix: str = "
         return sorted({getattr(r, attr) for r in recipe_list if getattr(r, attr)})
 
     f1, f2, f3, f4 = st.columns(4)
-    sel_prof = f1.multiselect("Profession", options("profession"), key=f"{prefix}_prof")
-    sel_exp = f2.multiselect("Expansion", options("expansion"), key=f"{prefix}_exp")
-    sel_patch = f3.multiselect("Patch", options("game_patch"), key=f"{prefix}_patch")
-    sel_cat = f4.multiselect("Category", options("category"), key=f"{prefix}_cat")
+    def remembered(col, label, attr):
+        opts = options(attr)
+        return col.multiselect(label, opts, default=saved_choices(f"{prefix}_{attr}", opts), key=f"{prefix}_{attr}")
+
+    sel_prof = remembered(f1, "Profession", "profession")
+    sel_exp = remembered(f2, "Expansion", "expansion")
+    sel_patch = remembered(f3, "Patch", "game_patch")
+    sel_cat = remembered(f4, "Category", "category")
 
     p1, p2, p3, p4 = st.columns(4)
     ah_cut = p1.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key=f"{prefix}_ahcut")
-    sell_through = p2.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0,
-                                   key=f"{prefix}_sell")
-    sort_by = p3.selectbox("Rank by", ["Profit / craft (g)", "ROI %", "Profit at stock cap (g)",
-                                       "Cost / craft (g)"], key=f"{prefix}_sort")
-    only_priced = p4.checkbox("Only fully priced", value=True, key=f"{prefix}_priced")
+    sell_through = p2.number_input("Expected sell-through (%)", 0.0, 100.0, value=saved(f"{prefix}_sell", 100.0),
+                                   step=5.0, key=f"{prefix}_sell")
+    sorts = ["Profit / craft (g)", "ROI %", "Profit at stock cap (g)", "Cost / craft (g)"]
+    sort_by = p3.selectbox("Rank by", sorts, index=saved_index(f"{prefix}_sort", sorts), key=f"{prefix}_sort")
+    only_priced = p4.checkbox("Only fully priced", value=saved(f"{prefix}_priced", True), key=f"{prefix}_priced")
     profile = profile_picker(prefix, profession)
     mechanics = mechanics_inputs(prefix, profile)
 
@@ -228,7 +238,8 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list, prefix: str 
         return
     opportunity, on_hand = load_resources()
     labels = {f"{r.name} - {r.profession or 'no profession'} ({r.key})": r for r in recipe_list}
-    recipe = labels[st.selectbox("Recipe", list(labels), key=f"{prefix}_recipe")]
+    recipe = labels[st.selectbox("Recipe", list(labels), key=f"{prefix}_recipe",
+                                 index=saved_index(f"{prefix}_recipe", list(labels)))]
 
     for warning in recipes.recipe_warnings(recipe):
         st.caption(f"⚠️ {warning}")
@@ -257,10 +268,11 @@ def render_calculator(index: pricing.PriceIndex, recipe_list: list, prefix: str 
                 choices[slot] = names[pick]
 
     c1, c2, c3 = st.columns(3)
-    crafts = int(c1.number_input("Number of crafts", min_value=1, value=10, step=1, key=f"{prefix}_n_{recipe.key}"))
+    crafts = int(c1.number_input("Number of crafts", min_value=1, value=saved(f"{prefix}_n_{recipe.key}", 10), step=1,
+                                 key=f"{prefix}_n_{recipe.key}"))
     ah_cut = c2.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key=f"{prefix}_ahcut")
-    sell_through = c3.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0,
-                                   key=f"{prefix}_sell")
+    sell_through = c3.number_input("Expected sell-through (%)", 0.0, 100.0, value=saved(f"{prefix}_sell", 100.0),
+                                   step=5.0, key=f"{prefix}_sell")
 
     output = index.get(recipe.crafted_item_id)
     output_name = recipe.crafted_item_name or output.name or f"item {recipe.crafted_item_id}"
@@ -450,7 +462,7 @@ def render_quality_tiers(result, recipe: recipes.Recipe, index: pricing.PriceInd
             price_g = col.number_input(f"{t['tier_label']}: {name} price (g)", min_value=0.0,
                                        value=None if res.is_missing else copper_to_gold(res.copper), step=0.01,
                                        format="%.4f", placeholder="no price", key=f"{prefix}_tp_{recipe.key}_{n}")
-            chance = col.number_input(f"{t['tier_label']}: chance (%)", 0.0, 100.0, value=None, step=1.0,
+            chance = col.number_input(f"{t['tier_label']}: chance (%)", 0.0, 100.0, value=saved(f"{prefix}_tc_{recipe.key}_{n}"), step=1.0,
                                       placeholder="your odds", key=f"{prefix}_tc_{recipe.key}_{n}")
             prices[t["item_id"]] = gold_to_copper(price_g) if price_g is not None else None
             if chance is not None:

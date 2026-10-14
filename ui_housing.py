@@ -9,7 +9,7 @@ from goldmaker import crafting, database, housing, pricing
 from goldmaker.currency import copper_to_gold
 import ui_blizzard
 import ui_crafting
-from ui_common import db, default_ah_cut_pct
+from ui_common import db, default_ah_cut_pct, saved, saved_choices, saved_index
 
 GOLD = st.column_config.NumberColumn(format="%.2f")
 
@@ -42,14 +42,16 @@ def render_hunt(table: pd.DataFrame) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     expansions = sorted({housing.expansion_of(r) for r in recipes})
-    pick_exp = c1.multiselect("Expansion", expansions, key="house_exp")
-    pick_prof = c2.multiselect("Profession", sorted({r.profession for r in recipes if r.profession}), key="house_prof")
-    who = c3.selectbox("Crafter", ["Anyone", "One of my characters knows it", "I have the profession"],
-                       key="house_who")
-    only_priced = c4.checkbox("Only fully priced", value=True, key="house_priced")
+    profs = sorted({r.profession for r in recipes if r.profession})
+    whos = ["Anyone", "One of my characters knows it", "I have the profession"]
+    pick_exp = c1.multiselect("Expansion", expansions, default=saved_choices("house_exp", expansions), key="house_exp")
+    pick_prof = c2.multiselect("Profession", profs, default=saved_choices("house_prof", profs), key="house_prof")
+    who = c3.selectbox("Crafter", whos, index=saved_index("house_who", whos), key="house_who")
+    only_priced = c4.checkbox("Only fully priced", value=saved("house_priced", True), key="house_priced")
     p1, p2 = st.columns(2)
     ah_cut = p1.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key="house_ahcut")
-    sell = p2.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0, key="house_sell")
+    sell = p2.number_input("Expected sell-through (%)", 0.0, 100.0, value=saved("house_sell", 100.0), step=5.0,
+                           key="house_sell")
 
     chosen = [r for r in recipes if (not pick_exp or housing.expansion_of(r) in pick_exp)
               and (not pick_prof or r.profession in pick_prof)]

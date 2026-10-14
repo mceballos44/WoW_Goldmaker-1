@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import closing
+from datetime import date, datetime
 from typing import Optional
 
 import pandas as pd
@@ -57,3 +58,58 @@ def reliability_badge(reliability: str) -> str:
     return {"none": "no data", "single batch": "single batch - no uncertainty",
             "low": "low", "moderate": "moderate",
             "reference": "reference data - not your experiments"}.get(reliability, reliability)
+
+
+# --- remembering inputs across sessions ----------------------------------------------------------------
+# Wrap a widget's starting value in ``saved(key, default)``; ``persist_ui_state()`` (end of every app run)
+# writes the current values of those widgets to the database, so the app reopens as it was left.
+
+def _store() -> dict:
+    if "_ui_saved" not in st.session_state:
+        with db() as conn:
+            st.session_state["_ui_saved"] = database.load_ui_state(conn)
+        st.session_state["_ui_keys"] = set()
+    return st.session_state["_ui_saved"]
+
+
+def saved(key: str, default=None):
+    """The value this widget had last time (any earlier session), else ``default``."""
+    store = _store()
+    st.session_state["_ui_keys"].add(key)
+    return store.get(key, default)
+
+
+def saved_index(key: str, options: list, default: int = 0) -> int:
+    """Index for a selectbox / radio: last choice if it is still an option."""
+    value = saved(key)
+    return options.index(value) if value in options else min(default, max(len(options) - 1, 0))
+
+
+def saved_choices(key: str, options: list, default: Optional[list] = None) -> list:
+    """Default list for a multiselect: last choices that are still options."""
+    return [v for v in saved(key, default or []) if v in options]
+
+
+def _jsonable(value):
+    if isinstance(value, (date, datetime)):
+        return None
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "item"):
+        return value.item()
+    return value if isinstance(value, (str, int, float, bool)) or value is None else None
+
+
+def persist_ui_state() -> None:
+    """Save remembered widget values that changed during this run."""
+    store = _store()
+    changed = False
+    for key in st.session_state.get("_ui_keys", set()):
+        if key in st.session_state:
+            value = _jsonable(st.session_state[key])
+            if store.get(key, object()) != value:
+                store[key] = value
+                changed = True
+    if changed:
+        with db() as conn:
+            database.save_ui_state(conn, store)

@@ -10,7 +10,7 @@ import streamlit as st
 from goldmaker import conversion, crafting, database, pricing, scanner
 from goldmaker.currency import copper_to_gold
 import ui_crafting
-from ui_common import db, default_ah_cut_pct, reliability_badge
+from ui_common import db, default_ah_cut_pct, reliability_badge, saved, saved_choices, saved_index
 
 GOLD = st.column_config.NumberColumn(format="%.2f")
 KINDS = ("crafting", "milling", "prospecting")
@@ -92,15 +92,20 @@ def render(table: pd.DataFrame) -> None:
         st.warning("No prices cached yet. Click **Refresh Prices** in the sidebar.")
     c1, c2, c3, c4 = st.columns(4)
     ah_cut = c1.number_input("AH cut (%)", 0.0, 99.0, value=default_ah_cut_pct(), step=0.5, key="scan_ahcut")
-    sell = c2.number_input("Expected sell-through (%)", 0.0, 100.0, value=100.0, step=5.0, key="scan_sell")
-    operations = int(c3.number_input("Planned operations", min_value=1, value=20, step=5, key="scan_ops",
+    sell = c2.number_input("Expected sell-through (%)", 0.0, 100.0, value=saved("scan_sell", 100.0), step=5.0,
+                           key="scan_sell")
+    operations = int(c3.number_input("Planned operations", min_value=1, value=saved("scan_ops", 20), step=5,
+                                     key="scan_ops",
                                      help="Used for required investment and the liquidity check."))
-    by = c4.selectbox("Rank by", list(scanner.RANKINGS), key="scan_rank")
+    by = c4.selectbox("Rank by", list(scanner.RANKINGS), key="scan_rank",
+                      index=saved_index("scan_rank", list(scanner.RANKINGS)))
     settings = _operation_settings()
     f1, f2, f3 = st.columns(3)
-    kinds = f1.multiselect("Kinds", KINDS, default=list(KINDS), key="scan_kinds")
-    only_priced = f2.checkbox("Only fully priced", value=True, key="scan_priced")
-    hide_small = f3.checkbox("Hide small-sample and reference yields", value=False, key="scan_small")
+    kinds = f1.multiselect("Kinds", KINDS, default=saved_choices("scan_kinds", list(KINDS), list(KINDS)),
+                           key="scan_kinds")
+    only_priced = f2.checkbox("Only fully priced", value=saved("scan_priced", True), key="scan_priced")
+    hide_small = f3.checkbox("Hide small-sample and reference yields", value=saved("scan_small", False),
+                             key="scan_small")
 
     opportunities = [o for o in collect(table, ah_cut / 100, sell / 100, operations, settings) if o.kind in kinds]
     st.session_state["scan_last"] = opportunities          # reused by the Excel export

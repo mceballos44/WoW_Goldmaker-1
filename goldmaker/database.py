@@ -222,6 +222,18 @@ CREATE TABLE IF NOT EXISTS character_known_recipes (
     PRIMARY KEY (character_key, recipe_id)
 );
 
+-- Yields the user typed in the calculator's "Manual yields" mode, per input item. Kept so they do not
+-- have to be typed again; separate from experiments and reference yields.
+CREATE TABLE IF NOT EXISTS manual_yields (
+    process         TEXT NOT NULL,
+    input_item_id   INTEGER NOT NULL,
+    output_item_id  INTEGER NOT NULL,
+    output_name     TEXT,
+    yield_per_unit  REAL NOT NULL CHECK (yield_per_unit >= 0),
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (process, input_item_id, output_item_id)
+);
+
 -- Output quality tiers of a recipe: each tier is its own item ID (e.g. silver / gold quality).
 CREATE TABLE IF NOT EXISTS recipe_output_tiers (
     recipe_id   INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
@@ -928,3 +940,52 @@ def known_recipe_holders(conn: sqlite3.Connection) -> dict:
     for row in conn.execute("SELECT recipe_id, character_key FROM character_known_recipes ORDER BY character_key"):
         holders.setdefault(row["recipe_id"], []).append(row["character_key"])
     return holders
+
+
+# --- Manual yields (typed in the calculator) ---------------------------------------------------------
+
+def save_manual_yields(conn: sqlite3.Connection, process: str, input_item_id: int, rows: list) -> None:
+    """Replace the manual yields of one input item. ``rows`` = [{"item_id", "name", "yield_per_unit"}]."""
+    _check_process(process)
+    for r in rows:
+        if r["yield_per_unit"] is None or r["yield_per_unit"] < 0:
+            raise ValueError("Yields cannot be negative or empty.")
+    now = utc_now_iso()
+    with conn:
+        conn.execute("DELETE FROM manual_yields WHERE process = ? AND input_item_id = ?",
+                     (process, int(input_item_id)))
+        conn.executemany("INSERT OR REPLACE INTO manual_yields VALUES (?,?,?,?,?,?)",
+                         [(process, int(input_item_id), int(r["item_id"]), r.get("name"),
+                           float(r["yield_per_unit"]), now) for r in rows])
+
+
+def list_manual_inputs(conn: sqlite3.Connection, process: str) -> pd.DataFrame:
+    """Input items that have saved manual yields (item ID and a name if one was recorded)."""
+    return pd.read_sql_query(
+        "SELECT input_item_id, COUNT(*) AS outputs FROM manual_yields WHERE process = ? GROUP BY input_item_id",
+        conn, params=(_check_process(process),))
+
+
+def list_manual_yields(conn: sqlite3.Connection, process: str, input_item_id: int) -> list:
+    return [dict(r) for r in conn.execute(
+        "SELECT * FROM manual_yields WHERE process = ? AND input_item_id = ? ORDER BY output_item_id",
+        (_check_process(process), int(input_item_id)))]
+
+
+# --- Remembered UI inputs ----------------------------------------------------------------------------
+
+UI_STATE_KEY = "ui_state"
+
+
+def load_ui_state(conn: sqlite3.Connection) -> dict:
+    """Calculator / filter inputs saved from earlier sessions ({widget key: value})."""
+    raw = get_setting(conn, UI_STATE_KEY)
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_ui_state(conn: sqlite3.Connection, state: dict) -> None:
+    set_setting(conn, UI_STATE_KEY, json.dumps(state, sort_keys=True))

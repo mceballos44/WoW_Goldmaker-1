@@ -27,6 +27,9 @@ Owner: Deadwalker2000. The repo is PUBLIC - never commit personal data.
 * Blizzard AH prices are datasets with scopes `bnet_commodities` / `bnet_realm` (`config.BNET_SCOPES`); order via
   `config.source_priority()`. Profile API data lives in `character_profession_tiers` / `character_known_recipes`,
   never in `character_professions` (CharExporter's). OAuth user tokens are never stored.
+* Inputs the user should not retype: give the widget `value=saved(key, default)` (or `saved_index` /
+  `saved_choices`) from `ui_common`; `persist_ui_state()` at the end of `main()` stores them. Do not persist
+  prefilled prices or the per-tab AH cut. Manual yields live in `manual_yields`.
 * `TODO.md` - open issues, things to verify, ideas. Keep it current with every change.
 * `tests/` - pytest. `samples/` - FAKE example files only.
 * `data/` - runtime SQLite and cached CSVs; git-ignored.
