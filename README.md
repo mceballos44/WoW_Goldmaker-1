@@ -24,6 +24,56 @@ real game data yet - see [`TODO.md`](TODO.md) for what still needs checking with
 | Import / Export | Excel workbook export, import template, import |
 | Settings | Default AH cut, data paths |
 
+## Start the app from the VS Code terminal (PowerShell) - main method
+
+Open the terminal in VS Code (**Terminal -> New Terminal**). The prompt shows which folder you are in.
+
+**1. Activate the environment** (once per terminal window). Replace the path with where your copy lives:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
+& "<your folder>\WoW_Goldmaker-1\.venv\Scripts\Activate.ps1"
+```
+
+The prompt then starts with `(.venv)`. (The first line only allows the activation script for this window; it
+changes nothing permanently. A `(base)` from Anaconda in front is fine.)
+
+**2. Go into the project folder** - `app.py` is *inside* `WoW_Goldmaker-1`, not in the folder above it:
+
+```powershell
+cd "<your folder>\WoW_Goldmaker-1"
+```
+
+**3. Get the latest version** (whenever there are updates):
+
+```powershell
+git checkout claude/quirky-hamilton-jmkh6q
+git pull
+python -m pip install -r requirements.txt
+```
+
+**4. Start the app:**
+
+```powershell
+python -m streamlit run app.py
+```
+
+The browser opens at http://localhost:8501 (if not, Ctrl+click the address in the terminal). Leave the terminal
+open while you use the app; **Ctrl+C** in the terminal stops it. Your data and settings are kept between runs.
+
+**Next time**, only steps 1, 2 and 4 (plus 3 when there is an update).
+
+| Message | What it means / fix |
+|---|---|
+| `Error: Invalid value: File does not exist: app.py` | You are in the folder above the project - do step 2. |
+| `No module named streamlit` / `streamlit is not recognized` | The environment is not active (step 1), or run `python -m pip install -r requirements.txt`. |
+| `running scripts is disabled on this system` | Run the `Set-ExecutionPolicy -Scope Process ...` line of step 1 first. |
+| `Activate.ps1 ... is not recognized` | The path is wrong, or `.venv` does not exist yet: run `setup_env.bat` once in the project folder. |
+| Port 8501 already in use | The app is already running in another terminal - use that tab, or stop it with Ctrl+C there. |
+
+Tip: open the `WoW_Goldmaker-1` folder itself in VS Code (**File -> Open Folder**) and new terminals start in the
+right place, so step 2 is not needed.
+
 ## Working in VS Code (recommended)
 
 Double-click **`open_in_vscode.bat`**. It creates the `.venv`, installs the dependencies and
