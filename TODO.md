@@ -22,6 +22,8 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 - [ ] **TSM CSV column headers.** Run *Refresh Prices* and look at *Price Database -> Dataset details*.
       Adjust `_ALIASES` in `goldmaker/tsm_client.py` if any expected column is listed as missing.
       Also unverified: `kr` / `tw` region slugs, the realm-slug helper.
+- [ ] **Does your CharExporter.lua hold several alts?** Open it in VS Code and search for `"basic"` - one hit
+      per stored character. Tell me how many you see after logging out of 2-3 alts.
 - [ ] **CharExporter file layout.** If import finds nothing, send the first ~40 lines of
       `...\WTF\Account\<ACCOUNT>\SavedVariables\CharExporter.lua` (remove character names if you like).
 - [ ] **AH commission 5%.** Default in `config.py`, editable in Settings. Confirm in game.
@@ -55,6 +57,12 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 - [ ] Dashboard charts across calculators (today each calculator has its own charts).
 
 ## Done
+
+- [x] 2026-10-14 "CharExporter keeps only one character": the app now re-checks the file every 15 s while open and
+      keeps every character it has imported, so alts can be switched one after another. Per the addon's source
+      (zwinout/CharExporter, Jul 2026) the file should hold every alt under `global["Name-Realm"]`; if it does
+      not, likely causes are alts on different WoW accounts (separate folders - all are read), logging out in
+      combat (the addon skips saving), or a crash / Alt+F4 (WoW does not write SavedVariables).
 
 - [x] 2026-10-14 Blizzard Game Data API recipe import (housing category search + browse), credentials stored
       locally, recipes imported as unverified with source and date; cache in `data/cache/blizzard` (git-ignored).

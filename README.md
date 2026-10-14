@@ -83,8 +83,10 @@ streamlit run app.py
 **It is automatic.** With *Auto-save on Logout* ticked, CharExporter writes every alt into its
 SavedVariables file each time you log out or `/reload` (WoW only lets addons write that one file, and
 only then). Every time the app starts or refreshes it checks that file's last-written time and, when it
-changed, imports the new snapshots - a note appears in the sidebar. So: log out of an alt, then refresh
-the app page. The app looks in the WoW folder you saved once (*Find CharExporter.lua*), otherwise in the
+changed, imports the new snapshots - a note appears in the sidebar. While the app is open it also re-checks
+every 15 seconds, so you can log out of one alt after another: each logout is picked up within seconds, and the
+app keeps every character it has seen (a new import never removes the others). That also covers a file that
+only ends up holding the last character. Every account folder (`WTF\Account\<each account>`) is read. The app looks in the WoW folder you saved once (*Find CharExporter.lua*), otherwise in the
 usual install folders. Rules: older snapshots never replace newer ones, your typed-in stats are never
 touched, nothing is ever written to the WoW folder. Turn it off or force a re-read with *Check now* at the
 top of *Character Profiles -> Import from CharExporter*.

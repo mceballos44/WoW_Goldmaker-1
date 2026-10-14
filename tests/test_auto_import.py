@@ -117,3 +117,34 @@ def test_scanner_flags_reference_yields():
     assert opp.profit_per_op == pytest.approx(G(10)) and opp.reliability == conversion.REFERENCE
     assert any("reference yields" in f for f in opp.flags)
     assert not any("small sample" in f for f in opp.flags)
+
+
+def one_character_file(name: str, timestamp: int) -> str:
+    """A SavedVariables file holding ONLY one character (synthetic)."""
+    return ('CharExporterDB = {\n\t["global"] = {\n'
+            f'\t\t["{name}-Test Realm"] = {{\n\t\t\t["timestamp"] = {timestamp},\n'
+            f'\t\t\t["basic"] = {{\n\t\t\t\t["name"] = "{name}",\n\t\t\t\t["realm"] = "Test Realm",\n\t\t\t}},\n'
+            '\t\t},\n\t},\n}\n')
+
+
+def test_file_that_only_keeps_the_last_character_still_builds_up_every_alt(conn, tmp_path):
+    saved = tmp_path / "WoW" / "_retail_" / "WTF" / "Account" / "ACC" / "SavedVariables"
+    saved.mkdir(parents=True)
+    lua = saved / "CharExporter.lua"
+    for n, name in enumerate(["Alpha", "Bravo", "Charlie"]):
+        lua.write_text(one_character_file(name, 1760000000 + n), encoding="utf-8")
+        stamp = 1760000000 + n * 100
+        os.utime(lua, (stamp, stamp))               # WoW rewrote the file on this alt's logout
+        assert auto_import.check_and_import(conn, [str(tmp_path / "WoW")]).changed == [f"{name}-Test Realm"]
+    keys = set(database.list_characters(conn)["character_key"])
+    assert keys == {"Alpha-Test Realm", "Bravo-Test Realm", "Charlie-Test Realm"}     # nobody was dropped
+
+
+def test_every_account_folder_is_read(conn, tmp_path):
+    account = tmp_path / "WoW" / "_retail_" / "WTF" / "Account"
+    for acc, name in (("111#1", "Alpha"), ("111#2", "Bravo")):
+        folder = account / acc / "SavedVariables"
+        folder.mkdir(parents=True)
+        (folder / "CharExporter.lua").write_text(one_character_file(name, 1760000000), encoding="utf-8")
+    report = auto_import.check_and_import(conn, [str(tmp_path / "WoW")])
+    assert len(report.files) == 2 and sorted(report.changed) == ["Alpha-Test Realm", "Bravo-Test Realm"]

@@ -53,26 +53,44 @@ def render() -> None:
 
 # --- Import -----------------------------------------------------------------------------
 
-def run_auto_import(force: bool = False) -> None:
-    """Called on every app run: import characters if CharExporter.lua changed since the last check.
+WATCH_SECONDS = 15
 
-    Cheap when nothing changed (only the file's last-written time is read). Results show in the sidebar.
+
+def run_auto_import(force: bool = False) -> bool:
+    """Import characters if CharExporter.lua changed since the last check. Returns True if any were stored.
+
+    Cheap when nothing changed (only the file's last-written time is read).
     """
     with db() as conn:
         if not force and not auto_import.is_enabled(conn):
-            return
+            return False
         try:
             report = auto_import.check_and_import(conn, force=force)
-        except Exception as exc:  # never let a bad file stop the app from starting
-            st.sidebar.warning(f"Automatic character import failed: {exc}")
-            return
+        except Exception as exc:  # never let a bad file stop the app
+            st.session_state["cp_auto_errors"] = [f"Automatic character import failed: {exc}"]
+            return False
     if report.files_read or force or "cp_auto_report" not in st.session_state:
         st.session_state["cp_auto_report"] = report      # keep the last report that actually read a file
+    st.session_state["cp_auto_errors"] = [f"Character import: {e}" for e in report.errors]
     if report.changed:
+        stamp = datetime.now().strftime("%H:%M:%S")
+        st.session_state["cp_auto_message"] = f"{stamp} - characters updated from CharExporter: " + \
+                                              ", ".join(report.changed)
         st.toast(f"Imported {len(report.changed)} character snapshot(s) from CharExporter")
-        st.sidebar.success("Characters updated from CharExporter: " + ", ".join(report.changed))
-    for error in report.errors:
-        st.sidebar.warning(f"Character import: {error}")
+    return bool(report.changed)
+
+
+@st.fragment(run_every=WATCH_SECONDS)
+def auto_import_watcher() -> None:
+    """Re-checks the file every few seconds while the app is open, so each logout is caught even if
+    CharExporter's file only holds the character that logged out last. Put it in the sidebar."""
+    if run_auto_import():
+        st.rerun(scope="app")                            # refresh every tab with the new characters
+    message = st.session_state.get("cp_auto_message")
+    if message:
+        st.success(message)
+    for error in st.session_state.get("cp_auto_errors", []):
+        st.warning(error)
 
 
 def _render_auto_import() -> None:
@@ -80,10 +98,12 @@ def _render_auto_import() -> None:
         enabled = auto_import.is_enabled(conn)
         locations = auto_import.search_locations(conn)
     st.markdown("**Automatic import**")
-    new_value = st.toggle("Import automatically whenever WoW has written a new CharExporter.lua",
+    new_value = st.toggle(f"Import automatically whenever WoW has written a new CharExporter.lua "
+                          f"(checked every {WATCH_SECONDS} s while the app is open)",
                           value=enabled, key="cp_auto_toggle",
-                          help="Checked every time the app runs or refreshes. Only the file's last-written time is "
-                               "read unless it changed. Older snapshots never replace newer ones; your typed-in "
+                          help="Each logout makes WoW rewrite the file; the app reads it within a few seconds and "
+                               "keeps every character it has seen, so switching alts one after another is fine "
+                               "while the app is open. Only the file's last-written time is read unless it changed. Older snapshots never replace newer ones; your typed-in "
                                "stats are never touched; nothing is written to the WoW folder.")
     if new_value != enabled:
         with db() as conn:
