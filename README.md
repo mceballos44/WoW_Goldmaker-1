@@ -402,7 +402,10 @@ One place to hunt housing gold:
 
 Imported recipes get the key `bnet-<recipe id>` (re-importing updates them), source
 "Blizzard Game Data API (date)", the profession, skill tier and category, and **no last-verified date** - so
-they are flagged as unverified until you check them. The API is known to leave out optional / quality
+they are flagged as unverified until you check them. **Housing decor recipes** come from the API without a
+crafted item; the app then uses the item whose name is exactly the recipe's name (from your price data, else
+Blizzard's item search) - only when there is exactly one - and notes that on the recipe. *Show what Blizzard sent*
+under the preview displays the raw response for any recipe. The API is known to leave out optional / quality
 reagents on modern recipes; recipes it cannot describe (no crafted item, no reagents) are listed and skipped,
 never guessed. Downloads are cached in `data/cache/blizzard`.
 

@@ -49,8 +49,12 @@ def _client():
     return blizzard_api.BlizzardClient(client_id, secret, st.session_state.get("region", "us"))
 
 
-def render_import(prefix: str = "bnet", latest_only_default: bool = True, tier_filter_default: str = "") -> None:
-    """Search / browse Blizzard recipes and import them. ``prefix`` keeps widget keys unique per tab."""
+def render_import(prefix: str = "bnet", latest_only_default: bool = True, tier_filter_default: str = "",
+                  lookup=None) -> None:
+    """Search / browse Blizzard recipes and import them. ``prefix`` keeps widget keys unique per tab.
+
+    ``lookup(name) -> [(item_id, name)]`` searches the cached prices by exact name (``PriceIndex.lookup_name``).
+    """
     st.caption("Imports recipes (reagents, quantities, crafted item) from Blizzard's official Game Data API. "
                "They arrive marked **unverified** with source 'Blizzard Game Data API (date)': the API is known to "
                "leave out optional / quality reagents on modern recipes, so compare a few in game before "
@@ -77,7 +81,7 @@ def render_import(prefix: str = "bnet", latest_only_default: bool = True, tier_f
         st.error(str(exc))
         return
     if found:
-        _fetch_and_import(client, found, prefix)
+        _fetch_and_import(client, found, prefix, lookup)
 
 
 def _search_all(client, prefix: str, latest_only_default: bool, tier_filter_default: str) -> list:
@@ -135,21 +139,35 @@ def _browse(client, prefix: str) -> list:
     return [(pname, tname, labels[c]["name"], rid, rname) for c in chosen for rid, rname in labels[c]["recipes"]]
 
 
-def _fetch_and_import(client, wanted: list, prefix: str) -> None:
+def _item_finder(client, lookup):
+    """Exact-name item lookup: your price data first, then Blizzard's item search."""
+    def find(name: str) -> list:
+        found = lookup(name) if lookup is not None else []
+        if found:
+            return found
+        try:
+            return client.search_items(name)
+        except BlizzardAPIError:
+            return []
+    return find
+
+
+def _fetch_and_import(client, wanted: list, prefix: str, lookup=None) -> None:
     st.caption(f"{len(wanted)} recipe(s) selected. Each is one request the first time; after that they come from "
                "a local cache (`data/cache/blizzard`).")
     refresh = st.checkbox("Re-download instead of using the cache", key=f"{prefix}_refresh")
     if st.button(f"Fetch {len(wanted)} recipe(s)", type="primary", key=f"{prefix}_fetch"):
         today, converted = date.today().isoformat(), []
+        find_item = _item_finder(client, lookup)
         progress = st.progress(0.0)
         for n, (prof, tier, cat, rid, rname) in enumerate(wanted, start=1):
             try:
                 raw = client.recipe(rid, refresh=refresh)
             except BlizzardAPIError as exc:
-                converted.append((rname, None, [str(exc)], []))
+                converted.append((rname, None, [str(exc)], [], [], rid))
             else:
-                conv = blizzard_api.recipe_from_api(raw, prof, tier, cat, today)
-                converted.append((rname, conv.recipe, conv.problems, conv.notes))
+                conv = blizzard_api.recipe_from_api(raw, prof, tier, cat, today, find_item=find_item)
+                converted.append((rname, conv.recipe, conv.problems, conv.notes, conv.reagents, rid))
             progress.progress(n / len(wanted), text=f"{n} / {len(wanted)}")
         st.session_state[f"{prefix}_converted"] = converted
 
@@ -160,14 +178,23 @@ def _fetch_and_import(client, wanted: list, prefix: str) -> None:
     st.dataframe(pd.DataFrame([{
         "Recipe": name, "Status": "ready" if recipe else "skipped",
         "Crafted item ID": recipe.crafted_item_id if recipe else None,
-        "Reagents": ", ".join(f"{g.quantity}x {g.item_name or g.item_id}" for g in recipe.reagents) if recipe else "",
-        "Problems / notes": "; ".join(problems + notes)} for name, recipe, problems, notes in converted]),
+        "Reagents": ", ".join(f"{g.quantity}x {g.item_name or g.item_id}" for g in reagents),
+        "Problems / notes": "; ".join(problems + notes)}
+        for name, recipe, problems, notes, reagents, _ in converted]),
         hide_index=True, column_config={"Crafted item ID": st.column_config.NumberColumn(format="%d")})
+    with st.expander("Show what Blizzard sent for one recipe (to check or report a problem)"):
+        options = {f"{c[0]} (recipe {c[5]})": c[5] for c in converted}
+        pick = st.selectbox("Recipe", list(options), key=f"{prefix}_raw_pick")
+        try:
+            st.json(client.recipe(options[pick]))
+        except BlizzardAPIError as exc:
+            st.error(str(exc))
+        st.caption("Copy this into the chat if a recipe is skipped or looks wrong - it contains no personal data.")
     st.caption(f"{len(ok)} ready, {len(converted) - len(ok)} skipped. Importing replaces recipes with the same key "
                "(bnet-<recipe id>), so re-importing updates them.")
     if ok and st.button(f"Import {len(ok)} recipe(s)", type="primary", key=f"{prefix}_import"):
         with db() as conn:
-            for _, recipe, _, _ in ok:
+            for _, recipe, *_ in ok:
                 database.save_recipe(conn, recipe)
         st.session_state.pop(f"{prefix}_converted", None)
         st.success(f"Imported {len(ok)} recipe(s). Check a few quantities in game and set a last-verified date on "

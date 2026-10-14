@@ -22,7 +22,8 @@ def render(table: pd.DataFrame) -> None:
     with tab_find:
         st.caption("Searches every expansion's skill tiers - set the expansion box to *Legion* for Legion "
                    "recipes, or clear it for all.")
-        ui_blizzard.render_import(prefix="house", latest_only_default=False, tier_filter_default="Legion")
+        ui_blizzard.render_import(prefix="house", latest_only_default=False, tier_filter_default="Legion",
+                                  lookup=pricing.PriceIndex(table).lookup_name)
     with tab_hunt:
         render_hunt(table)
 

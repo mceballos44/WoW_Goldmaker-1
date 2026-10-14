@@ -11,6 +11,10 @@ Move items to **Done** with a one-line note on how they were solved (and the com
       develop.battle.net, then *Character Profiles -> Battle.net -> Sign in*. Check all alts arrive.
 - [ ] **Blizzard AH prices, first live run.** Refresh with the two Blizzard boxes ticked; compare a few prices with
       the game / TSM. The market estimate (cheapest 15% of listed units) is this app's choice - say if you want another.
+- [ ] **Housing decor: crafted item by name.** First live run found Legion housing categories (Suramar Fence, Tauren
+      Soup Pot, Dalaran Auto-Hammer...) but Blizzard's recipe data names no crafted item for them. Now matched by
+      exact unique name (prices, then Blizzard item search). Check a few matched item IDs; if recipes are still
+      skipped, paste one *Show what Blizzard sent* response.
 - [ ] **Housing finder, first live run.** Find & import with *Legion* in the expansion box; tell me the category names
       found and whether known recipes show up under "Who can craft".
 - [ ] **Why only one CharExporter character?** *Character Profiles -> Import from CharExporter -> Find* now lists every

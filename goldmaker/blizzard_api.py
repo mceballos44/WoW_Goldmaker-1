@@ -95,13 +95,13 @@ class BlizzardClient:
         return self.get_with_time(path, cache_key, namespace, token)[0]
 
     def get_with_time(self, path: str, cache_key: Optional[str] = None, namespace: str = "static",
-                      token: Optional[str] = None) -> tuple:
+                      token: Optional[str] = None, extra_params: Optional[dict] = None) -> tuple:
         """(document, Last-Modified header or None). ``token`` = a user's token (profile data)."""
         cached = self._cache_file(cache_key)
         if cached is not None and cached.is_file():
             return json.loads(cached.read_text(encoding="utf-8")), None
         url = API_HOSTS[self.region] + path
-        params = {"namespace": f"{namespace}-{self.region}", "locale": self.locale}
+        params = {"namespace": f"{namespace}-{self.region}", "locale": self.locale, **(extra_params or {})}
         try:
             response = self.session.get(url, params=params, timeout=config.HTTP_TIMEOUT_SECONDS,
                                         headers={"Authorization": f"Bearer {token or self.token()}",
@@ -167,6 +167,23 @@ class BlizzardClient:
     def item(self, item_id: int) -> dict:
         return self.get(f"/data/wow/item/{int(item_id)}", cache_key=f"item_{int(item_id)}")
 
+    def search_items(self, name: str) -> list:
+        """[(item_id, name)] whose name equals ``name`` exactly (case-insensitive), via the item search API."""
+        wanted = (name or "").strip()
+        if not wanted:
+            return []
+        data, _ = self.get_with_time("/data/wow/search/item", cache_key=f"itemsearch_{wanted.lower()}",
+                                     extra_params={f"name.{self.locale}": wanted, "orderby": "id", "_page": 1})
+        found = []
+        for hit in data.get("results", []):
+            item = hit.get("data") or {}
+            item_name = item.get("name")
+            if isinstance(item_name, dict):
+                item_name = item_name.get(self.locale) or next(iter(item_name.values()), None)
+            if item.get("id") is not None and (item_name or "").strip().lower() == wanted.lower():
+                found.append((int(item["id"]), item_name))
+        return found
+
     def recipe(self, recipe_id: int, refresh: bool = False) -> dict:
         key = None if refresh else f"recipe_{int(recipe_id)}"
         return self.get(f"/data/wow/recipe/{int(recipe_id)}", cache_key=key)
@@ -191,6 +208,7 @@ class Conversion:
     recipe: Optional[Recipe]
     problems: list = field(default_factory=list)      # the recipe could not be imported
     notes: list = field(default_factory=list)         # imported, but check this
+    reagents: list = field(default_factory=list)      # parsed reagents, also when the recipe is skipped
 
 
 def _ref(value) -> tuple:
@@ -199,9 +217,25 @@ def _ref(value) -> tuple:
     return None, None
 
 
+def _other_crafted_ref(raw: dict) -> tuple:
+    """(key, id, name) of any other top-level field that names what is crafted (e.g. a decor entry)."""
+    for key, value in raw.items():
+        if key in ("crafted_item", "alliance_crafted_item", "horde_crafted_item"):
+            continue
+        if ("craft" in key or "decor" in key) and isinstance(value, dict) and value.get("id") is not None:
+            return key, value.get("id"), value.get("name")
+    return None, None, None
+
+
 def recipe_from_api(raw: dict, profession: Optional[str], skill_tier: Optional[str],
-                    category: Optional[str], fetched_on: Optional[str] = None) -> Conversion:
-    """Turn one ``/data/wow/recipe/{id}`` document into a ``Recipe`` (or report why not)."""
+                    category: Optional[str], fetched_on: Optional[str] = None,
+                    find_item=None) -> Conversion:
+    """Turn one ``/data/wow/recipe/{id}`` document into a ``Recipe`` (or report why not).
+
+    ``find_item(name) -> [(item_id, name)]`` is used when the API names no crafted item (housing decor
+    recipes): an item whose name is exactly the recipe's name is used only if there is exactly one, and the
+    recipe says so in its notes.
+    """
     fetched_on = fetched_on or date.today().isoformat()
     recipe_id = raw.get("id")
     name = raw.get("name") or f"recipe {recipe_id}"
@@ -214,7 +248,23 @@ def recipe_from_api(raw: dict, profession: Optional[str], skill_tier: Optional[s
         if crafted_id is not None and alliance[0] != horde[0] and None not in (alliance[0], horde[0]):
             result.notes.append(f"Faction-specific output: imported the {'Alliance' if alliance[0] == crafted_id else 'Horde'} item.")
     if crafted_id is None:
-        result.problems.append("the API lists no crafted item (enchants and similar have none)")
+        key, other_id, other_name = _other_crafted_ref(raw)
+        if other_id is not None:
+            crafted_id, crafted_name = other_id, other_name
+            result.notes.append(f"Crafted item taken from the API field '{key}' - check it is the sellable item.")
+    if crafted_id is None and find_item is not None:
+        matches = find_item(name)
+        if len(matches) == 1:
+            crafted_id, crafted_name = matches[0]
+            result.notes.append(f"The API names no crafted item; matched by exact name to item {crafted_id} - "
+                                "check it in game.")
+        elif len(matches) > 1:
+            result.problems.append(f"the API names no crafted item and several items are called '{name}' "
+                                   f"({', '.join(str(m[0]) for m in matches[:6])}) - add it by hand")
+    if crafted_id is None and not result.problems:
+        fields = ", ".join(sorted(raw)) or "none"
+        result.problems.append("the API lists no crafted item and no item has exactly this name "
+                               f"(fields in the response: {fields})")
 
     quantity = raw.get("crafted_quantity") or {}
     if "value" in quantity:
@@ -238,6 +288,7 @@ def recipe_from_api(raw: dict, profession: Optional[str], skill_tier: Optional[s
             result.problems.append(f"reagent #{slot} has no item or quantity")
             continue
         reagents.append(Reagent(slot=slot, item_id=int(item_id), quantity=int(qty), item_name=item_name))
+    result.reagents = reagents
     if not raw.get("reagents"):
         result.problems.append("the API lists no reagents")
     if raw.get("modified_crafting_slots"):

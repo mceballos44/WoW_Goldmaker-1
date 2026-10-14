@@ -40,7 +40,7 @@ def render(table: pd.DataFrame) -> None:
     with tab_recipes:
         render_recipes(table, index, recipe_list)
     with tab_bnet:
-        ui_blizzard.render_import()
+        ui_blizzard.render_import(lookup=index.lookup_name)
     with tab_stock:
         render_stock(table)
 

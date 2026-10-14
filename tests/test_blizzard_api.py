@@ -106,3 +106,41 @@ def test_faction_specific_output():
                             "horde_crafted_item": {"id": 12},
                             "reagents": [{"reagent": {"id": 5}, "quantity": 1}]}, None, None, None)
     assert conv.recipe.crafted_item_id == 11 and "Alliance" in conv.notes[0]
+
+
+# --- housing decor recipes: the API names no crafted item ------------------------------------------
+
+DECOR = {"id": 9501, "name": "Test Fence", "reagents": [{"reagent": {"id": 999103, "name": "Plank"}, "quantity": 6}],
+         "crafted_quantity": {"value": 1}}
+
+
+def test_decor_recipe_matched_by_exact_unique_name():
+    conv = recipe_from_api(DECOR, "Carpentry", "Legion Carpentry", "Decor", find_item=lambda n: [(999300, n)])
+    assert conv.recipe.crafted_item_id == 999300 and any("matched by exact name" in n for n in conv.notes)
+    assert conv.recipe.last_verified is None
+
+
+def test_decor_recipe_ambiguous_or_unknown_name_is_skipped_but_shows_reagents():
+    many = recipe_from_api(DECOR, None, None, None, find_item=lambda n: [(1, n), (2, n)])
+    assert many.recipe is None and "several items" in many.problems[0]
+    none = recipe_from_api(DECOR, None, None, None, find_item=lambda n: [])
+    assert none.recipe is None and "fields in the response: crafted_quantity, id, name, reagents" in none.problems[0]
+    assert [(g.item_id, g.quantity) for g in none.reagents] == [(999103, 6)]
+
+
+def test_other_crafted_field_is_used_and_noted():
+    raw = dict(DECOR, crafted_decor={"id": 999301, "name": "Test Fence"})
+    conv = recipe_from_api(raw, None, None, None)
+    assert conv.recipe.crafted_item_id == 999301 and "crafted_decor" in conv.notes[0]
+
+
+def test_item_search_keeps_only_exact_names(tmp_path):
+    class Search(FakeSession):
+        def get(self, url, params, timeout, headers):
+            assert params["name.en_US"] == "Test Fence" and params["namespace"] == "static-us"
+            return FakeResponse(200, {"results": [
+                {"data": {"id": 999300, "name": {"en_US": "Test Fence"}}},
+                {"data": {"id": 999302, "name": {"en_US": "Test Fence Post"}}}]})
+    c = BlizzardClient("id", "secret", "us", session=Search({}), cache_dir=tmp_path)
+    assert c.search_items("Test Fence") == [(999300, "Test Fence")]
+    assert c.search_items("  ") == []
