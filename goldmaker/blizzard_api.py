@@ -86,16 +86,25 @@ class BlizzardClient:
         self._token_expires = time.time() + float(data.get("expires_in", 0))
         return self._token
 
-    def get(self, path: str, cache_key: Optional[str] = None) -> dict:
-        """GET a static game-data document. ``cache_key`` stores the JSON locally for re-use."""
+    def get(self, path: str, cache_key: Optional[str] = None, namespace: str = "static",
+            token: Optional[str] = None) -> dict:
+        """GET a game-data document. ``cache_key`` stores the JSON locally for re-use.
+
+        ``namespace`` is "static" (recipes, items) or "dynamic" (realms, auctions).
+        """
+        return self.get_with_time(path, cache_key, namespace, token)[0]
+
+    def get_with_time(self, path: str, cache_key: Optional[str] = None, namespace: str = "static",
+                      token: Optional[str] = None) -> tuple:
+        """(document, Last-Modified header or None). ``token`` = a user's token (profile data)."""
         cached = self._cache_file(cache_key)
         if cached is not None and cached.is_file():
-            return json.loads(cached.read_text(encoding="utf-8"))
+            return json.loads(cached.read_text(encoding="utf-8")), None
         url = API_HOSTS[self.region] + path
-        params = {"namespace": f"static-{self.region}", "locale": self.locale}
+        params = {"namespace": f"{namespace}-{self.region}", "locale": self.locale}
         try:
             response = self.session.get(url, params=params, timeout=config.HTTP_TIMEOUT_SECONDS,
-                                        headers={"Authorization": f"Bearer {self.token()}",
+                                        headers={"Authorization": f"Bearer {token or self.token()}",
                                                  "User-Agent": config.USER_AGENT})
         except requests.RequestException as exc:
             raise BlizzardAPIError(f"Request failed for {path}: {exc}") from exc
@@ -109,7 +118,8 @@ class BlizzardClient:
         if cached is not None:
             cached.parent.mkdir(parents=True, exist_ok=True)
             cached.write_text(json.dumps(data), encoding="utf-8")
-        return data
+        headers = getattr(response, "headers", None) or {}
+        return data, headers.get("Last-Modified")
 
     def _cache_file(self, key: Optional[str]) -> Optional[Path]:
         if key is None or self.cache_dir is None:
@@ -125,19 +135,47 @@ class BlizzardClient:
 
     def skill_tiers(self, profession_id: int) -> list:
         """[(id, name)] - one tier per expansion, e.g. 'Khaz Algar Alchemy'."""
-        data = self.get(f"/data/wow/profession/{int(profession_id)}")
+        data = self.get(f"/data/wow/profession/{int(profession_id)}", cache_key=f"profession_{int(profession_id)}")
         return [(t["id"], t.get("name") or str(t["id"])) for t in data.get("skill_tiers", [])]
 
     def categories(self, profession_id: int, tier_id: int) -> list:
         """[{"name", "recipes": [(id, name)]}] for one skill tier."""
-        data = self.get(f"/data/wow/profession/{int(profession_id)}/skill-tier/{int(tier_id)}")
+        data = self.get(f"/data/wow/profession/{int(profession_id)}/skill-tier/{int(tier_id)}",
+                        cache_key=f"tier_{int(profession_id)}_{int(tier_id)}")
         return [{"name": c.get("name") or "(unnamed)",
                  "recipes": [(r["id"], r.get("name") or str(r["id"])) for r in c.get("recipes", [])]}
                 for c in data.get("categories", [])]
 
+    def connected_realm_id(self, realm_slug: str) -> int:
+        data = self.get(f"/data/wow/realm/{realm_slug}", namespace="dynamic")
+        href = (data.get("connected_realm") or {}).get("href", "")
+        match = re.search(r"/connected-realm/(\d+)", href)
+        if not match:
+            raise BlizzardAPIError(f"Blizzard did not return a connected realm for '{realm_slug}'.")
+        return int(match.group(1))
+
+    def commodity_auctions(self) -> tuple:
+        """(auctions, last_modified) - region-wide commodity listings."""
+        data, modified = self.get_with_time("/data/wow/auctions/commodities", namespace="dynamic")
+        return data.get("auctions", []), modified
+
+    def realm_auctions(self, connected_realm_id: int) -> tuple:
+        data, modified = self.get_with_time(f"/data/wow/connected-realm/{int(connected_realm_id)}/auctions",
+                                            namespace="dynamic")
+        return data.get("auctions", []), modified
+
+    def item(self, item_id: int) -> dict:
+        return self.get(f"/data/wow/item/{int(item_id)}", cache_key=f"item_{int(item_id)}")
+
     def recipe(self, recipe_id: int, refresh: bool = False) -> dict:
         key = None if refresh else f"recipe_{int(recipe_id)}"
         return self.get(f"/data/wow/recipe/{int(recipe_id)}", cache_key=key)
+
+
+def is_housing(category: Optional[str], keywords=HOUSING_KEYWORDS) -> bool:
+    """True when a category name contains one of the housing words (case-insensitive)."""
+    text = (category or "").lower()
+    return any(k.strip().lower() in text for k in keywords if k and k.strip())
 
 
 def matching_categories(categories: list, keywords) -> list:

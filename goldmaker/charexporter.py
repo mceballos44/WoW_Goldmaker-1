@@ -259,14 +259,18 @@ def parse_savedvariables(text: str) -> ParseResult:
     saved = _as_dict(assignments[SAVED_VARIABLE_NAME])
     records = _as_dict(saved.get("global"))
     result = ParseResult(characters=[], source_format="savedvariables")
-    ignored = 0
+    ignored = []
     for key, record in records.items():
         if isinstance(record, dict) and any(k in record for k in ("timestamp", "professions", "basic")):
             result.characters.append(_character_from_record(record, str(key), "SavedVariables"))
         else:
-            ignored += 1
+            ignored.append(str(key))
     if ignored:
-        result.warnings.append(f"{ignored} unrecognised entr{'y' if ignored == 1 else 'ies'} ignored.")
+        result.warnings.append(f"{len(ignored)} unrecognised entr{'y' if len(ignored) == 1 else 'ies'} ignored: "
+                               + ", ".join(ignored[:10]))
+    if not records and saved:
+        result.warnings.append("The file has no 'global' section with characters. Top-level keys found: "
+                               + ", ".join(str(k) for k in list(saved)[:10]))
     if not result.characters:
         result.warnings.append(
             "No saved characters found. In-game: /charexport -> tick 'Auto-save on Logout', "

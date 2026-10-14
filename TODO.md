@@ -7,6 +7,14 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 - [ ] **Reset the Blizzard client secret** on develop.battle.net (it was pasted into a chat), then paste the new
       one in *Settings -> Blizzard API* and press **Save and test**.
+- [ ] **Battle.net sign-in.** Add `http://localhost:8501/` under Redirect URLs of your client on
+      develop.battle.net, then *Character Profiles -> Battle.net -> Sign in*. Check all alts arrive.
+- [ ] **Blizzard AH prices, first live run.** Refresh with the two Blizzard boxes ticked; compare a few prices with
+      the game / TSM. The market estimate (cheapest 15% of listed units) is this app's choice - say if you want another.
+- [ ] **Housing finder, first live run.** Find & import with *Legion* in the expansion box; tell me the category names
+      found and whether known recipes show up under "Who can craft".
+- [ ] **Why only one CharExporter character?** *Character Profiles -> Import from CharExporter -> Find* now lists every
+      file found and the preview lists any skipped entries by name. Send me what it shows if alts are still missing.
 - [ ] **Blizzard API importer, first live run.** Built against the documented endpoints but never run against
       the live API (the cloud session's network blocks battle.net). Try *Housing / Crafting -> Import from
       Blizzard API -> Search*. Tell me the housing category names it finds (or that it finds none), and compare
@@ -46,6 +54,11 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 
 ## Ideas / not built yet
 
+- [ ] **Auctionator prices** from its SavedVariables file (read-only, like CharExporter). Need the first ~40 lines of
+      `...\WTF\Account\<ACCOUNT>\SavedVariables\Auctionator.lua` to see the layout before parsing it.
+- [ ] Item names for Blizzard-only prices (Blizzard item API, cached) when no TSM data is loaded.
+- [ ] Guide sites (wowgoldfarms.com etc.): no feed; numbers go in as reference yields by hand.
+
 - [ ] Optional: Blizzard Profile API for alts' professions (no Multicraft / Resourcefulness there).
 
 - [ ] Remember quality-tier odds per profile + recipe (today they are typed per calculation).
@@ -57,6 +70,10 @@ Move items to **Done** with a one-line note on how they were solved (and the com
 - [ ] Dashboard charts across calculators (today each calculator has its own charts).
 
 ## Done
+
+- [x] 2026-10-14 Blizzard AH prices (commodities + realm), Battle.net sign-in / by-name character import with
+      profession tiers and known recipes, Housing finder (all expansions, Legion default, who can craft),
+      CharExporter folder import reads every file and reports skipped entries.
 
 - [x] 2026-10-14 "CharExporter keeps only one character": the app now re-checks the file every 15 s while open and
       keeps every character it has imported, so alts can be switched one after another. Per the addon's source

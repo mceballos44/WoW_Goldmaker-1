@@ -33,12 +33,15 @@ TABLE_COLUMNS = [
 
 def build_price_table(prices: pd.DataFrame, overrides: pd.DataFrame,
                       basis: str = config.DEFAULT_PRICE_BASIS,
-                      now: Optional[datetime] = None) -> pd.DataFrame:
-    """One row per item with the effective price (copper) and its provenance."""
+                      now: Optional[datetime] = None, priority: Optional[tuple] = None) -> pd.DataFrame:
+    """One row per item with the effective price (copper) and its provenance.
+
+    ``priority`` is the dataset order (default ``config.source_priority()``).
+    """
     if basis not in PRICE_COLUMNS:
         raise ValueError(f"Unknown price basis '{basis}'. Choose from {PRICE_COLUMNS}.")
     now = now or datetime.now(timezone.utc)
-    rank = {scope: i for i, scope in enumerate(config.SOURCE_PRIORITY)}
+    rank = {scope: i for i, scope in enumerate(priority or config.source_priority())}
 
     if prices.empty:
         table = pd.DataFrame(columns=TABLE_COLUMNS)

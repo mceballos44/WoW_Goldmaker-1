@@ -26,6 +26,18 @@ SCOPES = ("commodities", "realm", "region")
 # per-realm non-commodity listings, region files are regional aggregates.
 SOURCE_PRIORITY = ("commodities", "realm", "region")
 
+# Blizzard Auction House API snapshots (current listings, refreshed about hourly by Blizzard).
+# They have no names and no sales history; see goldmaker/blizzard_prices.py.
+BNET_SCOPES = ("bnet_commodities", "bnet_realm")
+ALL_SCOPES = SCOPES + BNET_SCOPES
+
+
+def source_priority(prefer_blizzard: bool = False) -> tuple:
+    """Order in which datasets are tried for an item's price (first with a value wins)."""
+    if prefer_blizzard:
+        return ("bnet_commodities", "bnet_realm") + SOURCE_PRIORITY
+    return ("commodities", "realm", "bnet_commodities", "bnet_realm", "region")
+
 HTTP_TIMEOUT_SECONDS = 60
 USER_AGENT = "WoWGoldmaker/0.1 (personal local analysis tool)"
 
@@ -35,7 +47,7 @@ COPPER_PER_GOLD = 10_000
 # --- Staleness ----------------------------------------------------------------
 # TSM states realm/commodity files update every few hours and region files
 # daily. These are *warning thresholds* for this app, not TSM guarantees.
-STALE_AFTER_HOURS = {"commodities": 12, "realm": 12, "region": 48}
+STALE_AFTER_HOURS = {"commodities": 12, "realm": 12, "region": 48, "bnet_commodities": 3, "bnet_realm": 3}
 
 PRICE_BASIS_LABELS = {
     "market_value": "Market value",

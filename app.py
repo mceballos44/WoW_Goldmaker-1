@@ -17,10 +17,11 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
-from goldmaker import config, database, pricing, tsm_client
+from goldmaker import blizzard_api, blizzard_prices, config, database, pricing, tsm_client
 import ui_blizzard
 import ui_crafting
 import ui_excel
+import ui_housing
 import ui_investment
 import ui_milling
 import ui_profession
@@ -32,7 +33,7 @@ from goldmaker.currency import format_gold, gold_to_copper
 st.set_page_config(page_title="WoW Goldmaker", page_icon="💰", layout="wide")
 
 TAB_NAMES = [
-    "Dashboard", "Opportunities", "Milling", "Prospecting", "Jewelcrafting", "Alchemy",
+    "Dashboard", "Opportunities", "Housing finder", "Milling", "Prospecting", "Jewelcrafting", "Alchemy",
     "Housing / Crafting", "AH Investment", "Price Database", "Character Profiles",
     "Import / Export", "Settings",
 ]
@@ -40,6 +41,8 @@ SCOPE_LABELS = {
     "commodities": "Commodities (region-wide)",
     "realm": "Realm items (non-commodity)",
     "region": "Region items (regional aggregates)",
+    "bnet_commodities": "Blizzard AH: commodities (region)",
+    "bnet_realm": "Blizzard AH: your realm",
 }
 MANUAL_ITEM = "— enter item ID manually —"
 
@@ -83,7 +86,7 @@ def persist_choices(region: str, realm_slug: str, basis: str) -> None:
 
 @st.cache_data(show_spinner=False)
 def load_price_table(version: str, region: str, realm_slug: str, basis: str,
-                     time_bucket: int) -> pd.DataFrame:
+                     time_bucket: int, prefer_blizzard: bool = False) -> pd.DataFrame:
     """Build the combined price table. Cached until data/overrides change.
 
     ``version`` and ``time_bucket`` exist only to invalidate the cache
@@ -92,7 +95,8 @@ def load_price_table(version: str, region: str, realm_slug: str, basis: str,
     with db() as conn:
         prices = database.get_prices(conn, region, realm_slug)
         overrides = database.list_overrides(conn)
-    return pricing.build_price_table(prices, overrides, basis)
+    return pricing.build_price_table(prices, overrides, basis,
+                                     priority=config.source_priority(prefer_blizzard))
 
 
 def dataset_rows(region: str, realm_slug: str) -> dict:
@@ -100,8 +104,9 @@ def dataset_rows(region: str, realm_slug: str) -> dict:
     with db() as conn:
         datasets = database.list_datasets(conn)
     found = {}
-    for scope in config.SCOPES:
-        key = tsm_client.dataset_key(scope, region, realm_slug)
+    for scope in config.ALL_SCOPES:
+        key = (blizzard_prices.dataset_key(scope, region, realm_slug) if scope in config.BNET_SCOPES
+               else tsm_client.dataset_key(scope, region, realm_slug))
         match = datasets[datasets["dataset_key"] == key]
         found[scope] = match.iloc[0] if not match.empty else None
     return found
@@ -137,6 +142,14 @@ def render_sidebar() -> tuple[str, str, str]:
     chosen = [scope for scope in config.SCOPES
               if st.sidebar.checkbox(SCOPE_LABELS[scope], value=scope != "region",
                                      key=f"fetch_{scope}")]
+    with db() as conn:
+        bnet_id = database.get_setting(conn, blizzard_api.SETTING_ID, "")
+        bnet_secret = database.get_setting(conn, blizzard_api.SETTING_SECRET, "")
+    if bnet_id and bnet_secret:
+        chosen += [scope for scope in config.BNET_SCOPES
+                   if st.sidebar.checkbox(SCOPE_LABELS[scope], value=True, key=f"fetch_{scope}")]
+    else:
+        st.sidebar.caption("Add your Blizzard API key in Settings to also download Blizzard's own AH listings.")
 
     if st.sidebar.button("🔄 Refresh Prices", type="primary"):
         if "realm" in chosen and not tsm_client.is_valid_slug(realm_slug):
@@ -144,10 +157,18 @@ def render_sidebar() -> tuple[str, str, str]:
         else:
             with st.spinner("Downloading from TradeSkillMaster..."):
                 with db() as conn:
-                    st.session_state["refresh_results"] = [
-                        tsm_client.fetch_dataset(conn, scope, region, realm_slug)
-                        for scope in chosen
-                    ]
+                    results = [tsm_client.fetch_dataset(conn, scope, region, realm_slug)
+                               for scope in chosen if scope in config.SCOPES]
+                    bnet = [scope for scope in chosen if scope in config.BNET_SCOPES]
+                    if bnet:
+                        try:
+                            client = blizzard_api.BlizzardClient(bnet_id, bnet_secret, region)
+                        except blizzard_api.BlizzardAPIError as exc:
+                            results += [tsm_client.FetchResult(scope, "", False, error=str(exc)) for scope in bnet]
+                        else:
+                            results += [blizzard_prices.fetch(conn, client, scope, region, realm_slug)
+                                        for scope in bnet]
+                    st.session_state["refresh_results"] = results
 
     for result in st.session_state.get("refresh_results", []):
         label = SCOPE_LABELS[result.scope]
@@ -172,7 +193,15 @@ def render_sidebar() -> tuple[str, str, str]:
                 f"{updated:%Y-%m-%d %H:%M} UTC ({describe_age(updated)})"
                 if pd.notna(updated) else f"• {scope}: TSM timestamp unavailable"
             )
-    st.sidebar.caption("TSM publishes periodic snapshots. These prices are **not real-time**.")
+    st.sidebar.caption("TSM and Blizzard publish periodic snapshots. These prices are **not real-time**.")
+    with db() as conn:
+        prefer_saved = database.get_setting(conn, "prefer_blizzard", "0") == "1"
+    prefer = st.sidebar.toggle("Prefer Blizzard AH prices over TSM", value=prefer_saved, key="prefer_blizzard",
+                               help="Off: TSM first (it has market values from sales history), Blizzard fills gaps. "
+                                    "On: Blizzard's current listings first. Overrides always win.")
+    if prefer != prefer_saved:
+        with db() as conn:
+            database.set_setting(conn, "prefer_blizzard", "1" if prefer else "0")
 
     persist_choices(region, realm_slug, basis)
     return region, realm_slug, basis
@@ -396,13 +425,15 @@ def render_settings() -> None:
 
 def main() -> None:
     init_state()
+    ui_profiles.handle_oauth_callback()
     region, realm_slug, basis = render_sidebar()
     with st.sidebar:
         ui_profiles.auto_import_watcher()
 
     with db() as conn:
         version = database.data_version(conn)
-    table = load_price_table(version, region, realm_slug, basis, int(time.time() // 300))
+    table = load_price_table(version, region, realm_slug, basis, int(time.time() // 300),
+                             bool(st.session_state.get("prefer_blizzard")))
 
     context = export_context(region, realm_slug, basis)
     tabs = dict(zip(TAB_NAMES, st.tabs(TAB_NAMES)))
@@ -410,6 +441,8 @@ def main() -> None:
         render_dashboard(region, realm_slug, table)
     with tabs["Opportunities"]:
         ui_scanner.render(table)
+    with tabs["Housing finder"]:
+        ui_housing.render(table)
     with tabs["Milling"]:
         ui_milling.render(table)
     with tabs["Prospecting"]:

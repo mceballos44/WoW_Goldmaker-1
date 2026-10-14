@@ -200,6 +200,28 @@ CREATE TABLE IF NOT EXISTS reference_yields (
     PRIMARY KEY (process, input_item_id, output_item_id)
 );
 
+-- Professions per expansion tier and known recipes, from Blizzard's Profile API. Separate from
+-- character_professions (CharExporter) so neither import overwrites the other.
+CREATE TABLE IF NOT EXISTS character_profession_tiers (
+    character_key     TEXT NOT NULL REFERENCES characters(character_key) ON DELETE CASCADE,
+    profession        TEXT NOT NULL,
+    tier_id           INTEGER NOT NULL,
+    tier_name         TEXT,
+    skill_points      INTEGER,
+    max_skill_points  INTEGER,
+    fetched_at        TEXT NOT NULL,
+    PRIMARY KEY (character_key, tier_id)
+);
+
+CREATE TABLE IF NOT EXISTS character_known_recipes (
+    character_key  TEXT NOT NULL REFERENCES characters(character_key) ON DELETE CASCADE,
+    recipe_id      INTEGER NOT NULL,
+    recipe_name    TEXT,
+    tier_id        INTEGER,
+    fetched_at     TEXT NOT NULL,
+    PRIMARY KEY (character_key, recipe_id)
+);
+
 -- Output quality tiers of a recipe: each tier is its own item ID (e.g. silver / gold quality).
 CREATE TABLE IF NOT EXISTS recipe_output_tiers (
     recipe_id   INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
@@ -326,8 +348,8 @@ def get_prices(conn: sqlite3.Connection, region: str, realm_slug: str) -> pd.Dat
         FROM prices p
         JOIN datasets d ON d.dataset_key = p.dataset_key
         WHERE d.region = ?
-          AND (d.scope IN ('commodities', 'region')
-               OR (d.scope = 'realm' AND d.realm_slug = ?))
+          AND (d.scope IN ('commodities', 'region', 'bnet_commodities')
+               OR (d.scope IN ('realm', 'bnet_realm') AND d.realm_slug = ?))
     """
     return pd.read_sql_query(query, conn, params=(region, realm_slug))
 
@@ -852,3 +874,57 @@ def delete_reference_yields(conn: sqlite3.Connection, process: str, input_item_i
     with conn:
         conn.execute("DELETE FROM reference_yields WHERE process = ? AND input_item_id = ?",
                      (_check_process(process), int(input_item_id)))
+
+
+# --- Characters from Blizzard's Profile API -----------------------------------------------------
+
+def upsert_character_basic(conn: sqlite3.Connection, character_key: str, name: str, realm: str,
+                           class_name: Optional[str] = None, level: Optional[int] = None,
+                           faction: Optional[str] = None, source: str = "Blizzard API") -> None:
+    """Add a character if missing; otherwise only fill in empty class / level / faction.
+
+    Never touches ``snapshot_at``, so CharExporter's snapshot-ordering rules are unaffected.
+    """
+    with conn:
+        conn.execute(
+            """INSERT INTO characters (character_key, name, realm, class_name, level, faction, snapshot_at,
+                                       imported_at, source)
+               VALUES (?,?,?,?,?,?,NULL,?,?)
+               ON CONFLICT(character_key) DO UPDATE SET
+                 class_name = COALESCE(characters.class_name, excluded.class_name),
+                 level = CASE WHEN excluded.level IS NOT NULL AND (characters.level IS NULL
+                              OR excluded.level > characters.level) THEN excluded.level ELSE characters.level END,
+                 faction = COALESCE(characters.faction, excluded.faction)""",
+            (character_key, name, realm, class_name, level, faction, utc_now_iso(), source))
+
+
+def save_blizzard_professions(conn: sqlite3.Connection, character_key: str, tiers: list, known: list) -> None:
+    """Replace a character's Blizzard profession tiers and known recipes.
+
+    ``tiers`` = [{"profession", "tier_id", "tier_name", "skill_points", "max_skill_points"}]
+    ``known`` = [{"recipe_id", "recipe_name", "tier_id"}]
+    """
+    now = utc_now_iso()
+    with conn:
+        conn.execute("DELETE FROM character_profession_tiers WHERE character_key = ?", (character_key,))
+        conn.execute("DELETE FROM character_known_recipes WHERE character_key = ?", (character_key,))
+        conn.executemany(
+            "INSERT INTO character_profession_tiers VALUES (?,?,?,?,?,?,?)",
+            [(character_key, t["profession"], int(t["tier_id"]), t.get("tier_name"), t.get("skill_points"),
+              t.get("max_skill_points"), now) for t in tiers])
+        conn.executemany(
+            "INSERT OR REPLACE INTO character_known_recipes VALUES (?,?,?,?,?)",
+            [(character_key, int(k["recipe_id"]), k.get("recipe_name"), k.get("tier_id"), now) for k in known])
+
+
+def list_profession_tiers(conn: sqlite3.Connection) -> pd.DataFrame:
+    return pd.read_sql_query("SELECT * FROM character_profession_tiers ORDER BY character_key, profession, tier_id",
+                             conn)
+
+
+def known_recipe_holders(conn: sqlite3.Connection) -> dict:
+    """recipe_id -> sorted list of character keys that know it (from the Profile API)."""
+    holders: dict = {}
+    for row in conn.execute("SELECT recipe_id, character_key FROM character_known_recipes ORDER BY character_key"):
+        holders.setdefault(row["recipe_id"], []).append(row["character_key"])
+    return holders

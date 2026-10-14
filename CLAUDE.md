@@ -24,6 +24,9 @@ Owner: Deadwalker2000. The repo is PUBLIC - never commit personal data.
   folder and keep the snapshot-ordering rules.
 * Blizzard API (`goldmaker/blizzard_api.py`): credentials only in the settings table (local DB), never in files.
   Imported recipes stay unverified (no `last_verified`) and report gaps instead of guessing.
+* Blizzard AH prices are datasets with scopes `bnet_commodities` / `bnet_realm` (`config.BNET_SCOPES`); order via
+  `config.source_priority()`. Profile API data lives in `character_profession_tiers` / `character_known_recipes`,
+  never in `character_professions` (CharExporter's). OAuth user tokens are never stored.
 * `TODO.md` - open issues, things to verify, ideas. Keep it current with every change.
 * `tests/` - pytest. `samples/` - FAKE example files only.
 * `data/` - runtime SQLite and cached CSVs; git-ignored.

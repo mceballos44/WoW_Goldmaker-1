@@ -14,12 +14,13 @@ real game data yet - see [`TODO.md`](TODO.md) for what still needs checking with
 |---|---|
 | Dashboard | Data freshness and counts |
 | Opportunities | Every recipe and herb/ore with experiments, ranked against current prices |
+| Housing finder | Every housing recipe in one place (Legion and other expansions), profit, who can craft it; import from Blizzard |
 | Milling / Prospecting | Calculator, experiment log with calibrated yields, comparison of herbs / ores |
 | Jewelcrafting / Alchemy | Crafting calculator for that profession with your character profiles, quality tiers, break-even material prices |
 | Housing / Crafting | All recipes: compare, calculate, import/export, stock and opportunity costs |
 | AH Investment | Buy now, sell later: bearish / baseline / bullish scenarios |
 | Price Database | Search prices, manual overrides, offline CSV import |
-| Character Profiles | Import alts from CharExporter, type in profession stats |
+| Character Profiles | Alts from CharExporter (automatic) or Battle.net sign-in, profession stats |
 | Import / Export | Excel workbook export, import template, import |
 | Settings | Default AH cut, data paths |
 
@@ -278,6 +279,48 @@ units_used, performed_at, notes, output_item_id, output_name, quantity`; rows sh
 edited and imported back; experiments already stored are skipped so nothing is double-counted.
 Download the empty template from the same tab.
 
+## Less typing: what comes in automatically
+
+| Data | Source | How |
+|---|---|---|
+| Prices | TSM public CSVs and/or **Blizzard Auction House API** | Sidebar -> Refresh Prices. Blizzard needs your API key (Settings). |
+| Characters, professions per expansion, known recipes | **Battle.net sign-in** (Blizzard Profile API) | Character Profiles -> Battle.net |
+| Characters, gear, concentration, specializations | CharExporter addon | automatic on every logout while the app is open |
+| Recipes (housing first) | **Blizzard Game Data API** | Housing finder -> Find & import, or Housing / Crafting -> Import from Blizzard API |
+| Multicraft / Resourcefulness %, yields | you | not published anywhere; Profession stats, experiments, reference yields |
+
+Not automatic, on purpose: Wowhead and guide sites such as wowgoldfarms.com have no data feed - scraping their
+pages breaks whenever they change and may not be allowed. Type their numbers into *Reference yields* (labelled as
+outside data). Auctionator's price file can be read like CharExporter's once its layout is checked (see TODO).
+
+## Blizzard Auction House prices
+
+With your API key saved, the sidebar offers *Blizzard AH: commodities (region)* and *Blizzard AH: your realm*.
+Blizzard publishes a snapshot of every current listing about once an hour. The app stores per item the **lowest
+listed unit price** (min buyout) and its own **market estimate** - the quantity-weighted mean price of the cheapest
+15% of listed units. Listings are not sales: there is no sale rate / sold per day, and no item names (names come
+from TSM data if you have it). By default TSM prices win and Blizzard fills the gaps; the sidebar switch *Prefer
+Blizzard AH prices over TSM* reverses that. Stale warning after 3 hours.
+
+## Battle.net sign-in (all your characters)
+
+*Character Profiles -> Battle.net*: add `http://localhost:8501/` under **Redirect URLs** of your client on
+develop.battle.net (once), then **Prepare sign-in link -> Sign in with Battle.net**. After you allow access, the
+app imports every character on the account (above the level you choose) with each profession's skill per
+expansion (e.g. *Legion Tailoring 100/100*) and the recipes it knows. The sign-in token is used once and not saved.
+Without signing in you can fetch a character by name, or refresh every stored character. This never replaces
+CharExporter data (gear, concentration, specializations) - both meet under the same "Name-Realm".
+
+## Housing finder
+
+One place to hunt housing gold:
+* **Find & import** searches every profession's skill tiers for housing / decor categories - the expansion box
+  starts at *Legion* (clear it for all expansions) - then fetches and imports the recipes.
+* **Hunt** lists every housing recipe (Blizzard category, or your own category containing "Housing" / "Decor")
+  with profit per craft, ROI, cost, sell price, TSM sold per day, flags, the expansion, and **who can craft it**:
+  a character that knows the recipe, else one with that expansion's profession tier, else one with the
+  profession. Filter by expansion, profession or "one of my characters knows it".
+
 ## Recipes from the Blizzard API (housing and more)
 
 *Housing / Crafting -> Import from Blizzard API* reads recipes from Blizzard's official Game Data API.
@@ -341,6 +384,9 @@ goldmaker/              logic only - no Streamlit imports
   profiles.py           merged profession profiles for calculators
   conversion.py         input item -> outputs maths, yield calibration, reference yields
   blizzard_api.py       Blizzard Game Data API client + recipe conversion
+  blizzard_prices.py    Blizzard Auction House listings -> prices
+  blizzard_profile.py   Battle.net sign-in, characters, professions, known recipes
+  housing.py            housing recipe selection and "who can craft it"
   auto_import.py        automatic CharExporter import (runs on every app start / refresh)
   milling.py            herb-named layer over conversion.py
   recipes.py            recipe model, validation, CSV/JSON import and export
@@ -357,6 +403,7 @@ ui_scanner.py           Opportunities tab
 ui_investment.py        AH Investment tab
 ui_excel.py             Import / Export tab
 ui_blizzard.py          Blizzard API credentials (Settings) and recipe import
+ui_housing.py           Housing finder tab
 ui_profiles.py          Character Profiles tab
 ui_common.py            shared widgets (item picker, db connection)
 TODO.md                 open issues, things to verify, ideas

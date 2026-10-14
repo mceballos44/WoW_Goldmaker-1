@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from goldmaker import auto_import, charexporter, database, profiles, wow_files
+from goldmaker import auto_import, blizzard_api, blizzard_profile, charexporter, database, profiles, tsm_client, wow_files
 
 SOURCE_DISK = "Read SavedVariables from this PC (all alts)"
 SOURCE_UPLOAD = "Upload a file"
@@ -41,10 +41,12 @@ def render() -> None:
         for kind, message in results:
             getattr(st, kind)(message)
 
-    tab_import, tab_chars, tab_stats = st.tabs(
-        ["Import from CharExporter", "Characters", "Profession stats"])
+    tab_import, tab_bnet, tab_chars, tab_stats = st.tabs(
+        ["Import from CharExporter", "Battle.net (all characters)", "Characters", "Profession stats"])
     with tab_import:
         render_import()
+    with tab_bnet:
+        render_battlenet()
     with tab_chars:
         render_characters()
     with tab_stats:
@@ -150,6 +152,8 @@ def render_import() -> None:
     else:
         _source_from_paste()
 
+    for line in st.session_state.get("cp_file_report", []) if method == SOURCE_DISK else []:
+        st.caption(line)
     pending = st.session_state.get("cp_pending")
     if pending:
         st.divider()
@@ -190,20 +194,40 @@ def _source_from_disk() -> None:
                 stamp = "?"
             return f"{p}   (file last written {stamp})"
 
-        choice = st.selectbox("File", found, format_func=label, key="cp_file_choice")
-        st.caption("The file's last-written time is when WoW last saved it (on logout/reload). "
-                   "Each character also carries its own snapshot time.")
-        if st.button("Read file", type="primary"):
-            try:
-                text = wow_files.read_text_file(choice)
-            except (OSError, ValueError) as exc:
-                st.error(f"Could not read the file: {exc}")
-            else:
-                _parse_into_pending(text, choice)
+        st.markdown(f"**{len(found)} CharExporter file(s) found** - one per WoW account folder:")
+        st.caption("\n".join(f"- {label(p)}" for p in found))
+        st.caption("All of them are read together, so alts on different WoW accounts all appear. The last-written "
+                   "time is when WoW last saved the file (on logout / reload).")
+        if st.button("Read all files", type="primary"):
+            _read_files(found)
     elif "cp_found_for" in st.session_state:
         st.warning("No CharExporter.lua found there. It is only created after you log out (or "
                    "/reload) with **Auto-save on Logout** ticked. Check the folder, or use "
                    "*Upload a file* / *Paste export text* instead.")
+
+
+def _read_files(paths: list) -> None:
+    """Parse every file and merge the characters into one preview (newest snapshot per character wins)."""
+    merged: dict = {}
+    warnings, per_file = [], []
+    for path in paths:
+        try:
+            result = charexporter.parse_savedvariables(wow_files.read_text_file(path))
+        except (OSError, ValueError) as exc:
+            per_file.append(f"{path}: could not be read - {exc}")
+            continue
+        per_file.append(f"{path}: {len(result.characters)} character(s)")
+        warnings.extend(f"{Path(path).parent.parent.name}: {w}" for w in result.warnings)
+        for c in result.characters:
+            key = c.character_key or id(c)
+            old = merged.get(key)
+            if old is None or (c.snapshot_at and (old.snapshot_at is None or c.snapshot_at > old.snapshot_at)):
+                merged[key] = c
+    st.session_state["cp_file_report"] = per_file
+    st.session_state["cp_pending"] = {
+        "result": charexporter.ParseResult(characters=list(merged.values()), source_format="savedvariables",
+                                           warnings=warnings),
+        "label": f"{len(paths)} file(s)"}
 
 
 def _source_from_upload() -> None:
@@ -455,3 +479,128 @@ def render_stats() -> None:
             "ingenuity_pct": "Ingenuity %", "notes": "Notes", "updated_at": "Updated (UTC)",
             "resourcefulness_saved_pct": "Resourcefulness saved %", "multicraft_extra_pct": "Multicraft extra %"}),
             hide_index=True)
+
+
+# --- Battle.net (Blizzard Profile API) -----------------------------------------------------------
+
+def _bnet_client():
+    with db() as conn:
+        cid = database.get_setting(conn, blizzard_api.SETTING_ID, "") or ""
+        secret = database.get_setting(conn, blizzard_api.SETTING_SECRET, "") or ""
+    return blizzard_api.BlizzardClient(cid, secret, st.session_state.get("region", "us"))
+
+
+def _redirect_uri() -> str:
+    with db() as conn:
+        return database.get_setting(conn, blizzard_profile.SETTING_REDIRECT, blizzard_profile.DEFAULT_REDIRECT)
+
+
+def handle_oauth_callback() -> None:
+    """When Battle.net sends the browser back with ?code=...&state=..., import the account's characters."""
+    params = st.query_params
+    code, state = params.get("code"), params.get("state")
+    if not code:
+        return
+    with db() as conn:
+        expected = database.get_setting(conn, blizzard_profile.SETTING_STATE, "")
+        database.set_setting(conn, blizzard_profile.SETTING_STATE, "")          # one use only
+    st.query_params.clear()
+    if not expected or state != expected:
+        st.session_state["cp_bnet_messages"] = [("error", "Battle.net sign-in could not be matched to this app "
+                                                          "(old or foreign link). Please sign in again.")]
+        return
+    try:
+        client = _bnet_client()
+        token = blizzard_profile.exchange_code(client, code, _redirect_uri())
+        characters = blizzard_profile.account_characters(client, token)
+        with db() as conn:
+            report = blizzard_profile.import_characters(conn, client, characters, token,
+                                                        min_level=st.session_state.get("cp_bnet_minlevel", 10))
+    except blizzard_api.BlizzardAPIError as exc:
+        st.session_state["cp_bnet_messages"] = [("error", str(exc))]
+        return
+    st.session_state["cp_bnet_messages"] = _report_messages(report, len(characters))
+
+
+def _report_messages(report, total: int) -> list:
+    messages = [("success", f"Battle.net: {len(report.imported)} of {total} character(s) imported with their "
+                            "professions and known recipes.")]
+    if report.skipped:
+        messages.append(("info", "Skipped: " + "; ".join(f"{k} ({why})" for k, why in report.skipped[:20])))
+    return messages
+
+
+def render_battlenet() -> None:
+    for kind, message in st.session_state.pop("cp_bnet_messages", []):
+        getattr(st, kind)(message)
+    with db() as conn:
+        has_key = bool(database.get_setting(conn, blizzard_api.SETTING_ID, ""))
+    if not has_key:
+        st.info("Add your Blizzard API client ID and secret on **Settings** first.")
+        return
+    st.caption("Gets every character on your Battle.net account with professions per expansion (e.g. *Legion "
+               "Tailoring* skill) and the recipes each one knows - used by the Housing finder for *who can craft "
+               "this*. Multicraft / Resourcefulness are not in Blizzard's data; keep typing those on *Profession stats*.")
+
+    st.markdown("**Sign in with Battle.net** (lists all your characters)")
+    redirect = st.text_input("Redirect URL", value=_redirect_uri(), key="cp_bnet_redirect",
+                             help="Add exactly this address under *Redirect URLs* of your client on develop.battle.net. "
+                                  "It is where Battle.net sends you back after signing in.")
+    st.number_input("Skip characters below level", 1, 90, value=10, key="cp_bnet_minlevel")
+    if st.button("Prepare sign-in link", key="cp_bnet_prepare"):
+        state = blizzard_profile.new_state()
+        with db() as conn:
+            database.set_setting(conn, blizzard_profile.SETTING_REDIRECT, redirect.strip())
+            database.set_setting(conn, blizzard_profile.SETTING_STATE, state)
+        st.session_state["cp_bnet_link"] = blizzard_profile.authorize_url(_bnet_client().client_id, redirect.strip(),
+                                                                          state)
+    if st.session_state.get("cp_bnet_link"):
+        st.link_button("Sign in with Battle.net", st.session_state["cp_bnet_link"], type="primary")
+        st.caption("Opens Battle.net. After you allow access you come back to this app in a new tab and the "
+                   "characters are imported. The sign-in token is used once and not saved.")
+
+    st.divider()
+    st.markdown("**Or refresh characters by name** (no sign-in needed)")
+    c1, c2, c3 = st.columns([2, 2, 1])
+    name = c1.text_input("Character name", key="cp_bnet_name")
+    realm = c2.text_input("Realm slug", value=st.session_state.get("realm_slug", ""), key="cp_bnet_realm")
+    if c3.button("Fetch", key="cp_bnet_fetch") and name.strip() and realm.strip():
+        _run_profile_import([blizzard_profile.AccountCharacter(name.strip(), realm.strip().lower(),
+                                                               _realm_name(realm.strip()))])
+    with db() as conn:
+        stored = database.list_characters(conn)
+    if not stored.empty and st.button(f"Refresh professions of all {len(stored)} stored character(s)",
+                                      key="cp_bnet_all"):
+        _run_profile_import([blizzard_profile.AccountCharacter(r.name, tsm_client.slugify_realm(r.realm), r.realm)
+                             for r in stored.itertuples()])
+        st.caption("Realm slugs were derived from realm names; a realm with unusual characters may be skipped.")
+
+    with db() as conn:
+        tiers = database.list_profession_tiers(conn)
+    if not tiers.empty:
+        st.subheader("Profession skill per expansion")
+        st.dataframe(tiers.drop(columns=["tier_id"]).rename(columns={
+            "character_key": "Character", "profession": "Profession", "tier_name": "Skill tier",
+            "skill_points": "Skill", "max_skill_points": "Max", "fetched_at": "Fetched (UTC)"}), hide_index=True)
+
+
+def _realm_name(slug: str) -> str:
+    """Display name for a slug typed by hand: an existing character's realm if it matches, else the slug."""
+    with db() as conn:
+        stored = database.list_characters(conn)
+    for realm in stored["realm"].dropna().unique() if not stored.empty else []:
+        if tsm_client.slugify_realm(realm) == slug.lower():
+            return realm
+    return slug.replace("-", " ").title()
+
+
+def _run_profile_import(characters: list) -> None:
+    try:
+        client = _bnet_client()
+        with db() as conn:
+            report = blizzard_profile.import_characters(conn, client, characters)
+    except blizzard_api.BlizzardAPIError as exc:
+        st.error(str(exc))
+        return
+    for kind, message in _report_messages(report, len(characters)):
+        getattr(st, kind)(message)
