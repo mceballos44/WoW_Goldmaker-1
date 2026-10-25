@@ -1,0 +1,13 @@
+{
+  "_comment": "Digest parameters for sp_digest.py. Edit here, not in the code.",
+  "enzymes": ["trypsin", "trypsin_noP", "lysc", "argc", "gluc", "aspn", "chymotrypsin"],
+  "primary_enzyme": "trypsin",
+  "missed_cleavages": 2,
+  "min_length": 7,
+  "max_length": 30,
+  "min_mass": 600.0,
+  "max_mass": 4600.0,
+  "unique_peptide_threshold": 2,
+  "longest_isoform_only": true,
+  "isoform_regex": "(?:gene[=:]\\s*|GN=)([A-Za-z0-9_.\\-]+)"
+}

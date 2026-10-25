@@ -1,0 +1,440 @@
+<title>Urchin Proteome Digest</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;700;800&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one working column; controls strip, enzyme comparison, then per-protein inspector */
+:root {
+  --bg: #f7f6fa; --surface: #ffffff; --fg: #1d1a26; --muted: #6a6478; --line: #e2dfe9;
+  --accent: #5b2a86; --accent-soft: #ece3f5; --teal: #1f7a74; --warn: #a35a00; --bad: #b42335;
+  --cov: #c9b3e3; --cut: #1f7a74;
+  --display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #14121a; --surface: #1d1a25; --fg: #ece9f3; --muted: #a39cb3; --line: #2f2b3a;
+  --accent: #c7a2ee; --accent-soft: #2d2340; --teal: #5cc8be; --warn: #e3a24a; --bad: #f07a88;
+  --cov: #4e3870; --cut: #5cc8be; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #14121a; --surface: #1d1a25; --fg: #ece9f3; --muted: #a39cb3; --line: #2f2b3a;
+  --accent: #c7a2ee; --accent-soft: #2d2340; --teal: #5cc8be; --warn: #e3a24a; --bad: #f07a88;
+  --cov: #4e3870; --cut: #5cc8be; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--fg); font-family: var(--display); font-size: 15px; line-height: 1.5 }
+.wrap { max-width: 1120px; margin: 0 auto; padding-block: 28px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 28px }
+h1 { font-size: 1.9rem; font-weight: 800; letter-spacing: -.02em; margin: 0; text-wrap: balance }
+h2 { font-size: 1.15rem; font-weight: 700; margin: 0; text-wrap: balance }
+p { margin: 0; max-width: 68ch }
+.muted { color: var(--muted) }
+.eyebrow { font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: var(--accent); font-weight: 700 }
+header { display: grid; gap: 8px }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 16px; min-width: 0 }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 16px; align-items: end }
+label { display: grid; gap: 4px; font-size: .8rem; color: var(--muted); font-weight: 500 }
+input[type=number], input[type=text], select { font: inherit; font-size: .9rem; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; width: 100% }
+input:focus-visible, select:focus-visible, button:focus-visible, .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.check { display: flex; gap: 8px; align-items: center; color: var(--fg); font-size: .85rem }
+button { font: inherit; font-weight: 700; font-size: .9rem; border-radius: 6px; padding: 8px 14px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--surface) }
+button.ghost { background: transparent; color: var(--accent) }
+button:disabled { opacity: .5; cursor: default }
+.drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 18px; display: flex; flex-wrap: wrap; gap: 12px 20px;
+  align-items: center; justify-content: space-between; cursor: pointer }
+.drop.over { border-color: var(--accent); background: var(--accent-soft) }
+.drop strong { font-size: 1rem }
+.status { font-family: var(--mono); font-size: .8rem; color: var(--muted); min-height: 1.2em }
+.pill { display: inline-block; font-size: .72rem; font-weight: 700; padding: 2px 8px; border-radius: 99px;
+  background: var(--accent-soft); color: var(--accent); letter-spacing: .03em }
+.pill.demo { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn) }
+.bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden }
+.bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s }
+.scroll { overflow-x: auto; min-width: 0 }
+table { border-collapse: collapse; width: 100%; font-size: .85rem; font-variant-numeric: tabular-nums }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap }
+th:first-child, td:first-child { text-align: left }
+th { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700 }
+tr.primary td { background: var(--accent-soft) }
+tr[data-enz] { cursor: pointer }
+td .meter { display: inline-block; width: 70px; height: 6px; background: var(--line); border-radius: 3px; vertical-align: middle; margin-left: 8px; overflow: hidden }
+td .meter > i { display: block; height: 100%; background: var(--accent) }
+.charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px }
+.chart { display: grid; gap: 6px; min-width: 0 }
+.chart h3 { font-size: .9rem; margin: 0; font-weight: 700 }
+svg text { fill: var(--muted); font-family: var(--display); font-size: 11px }
+.kpis { display: flex; flex-wrap: wrap; gap: 12px 32px }
+.kpi b { display: block; font-size: 1.6rem; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: -.02em }
+.kpi span { font-size: .78rem; color: var(--muted) }
+.seq { font-family: var(--mono); font-size: .8rem; line-height: 1.9; word-break: break-all; background: var(--bg);
+  border-radius: 6px; padding: 12px; max-height: 360px; overflow: auto }
+.seq .c { background: var(--cov) }
+.seq .u { background: var(--cov); text-decoration: underline 2px var(--accent); text-underline-offset: 3px }
+.seq .k { color: var(--cut); font-weight: 600 }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: .78rem; color: var(--muted) }
+.legend i { display: inline-block; width: 12px; height: 12px; vertical-align: -2px; margin-right: 6px; border-radius: 2px }
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end }
+.row > label { flex: 1 1 220px }
+details summary { cursor: pointer; font-weight: 700; font-size: .9rem }
+details p, details li { font-size: .88rem; color: var(--muted) }
+details ul { padding-left: 20px; margin: 8px 0 0 }
+code { font-family: var(--mono); font-size: .85em }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Bottom-up proteomics · in silico digest</div>
+    <h1>Urchin Proteome Digest</h1>
+    <p class="muted">Load the <i>Strongylocentrotus purpuratus</i> protein FASTA from Echinobase and see how well trypsin and other proteases
+      would cut the whole proteome into MS-detectable peptides. Everything runs in your browser; the file is never uploaded.</p>
+  </header>
+
+  <section class="panel" aria-labelledby="h-input">
+    <h2 id="h-input">Proteome and digest settings</h2>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose a FASTA file">
+      <div><strong>Drop a protein FASTA here</strong> <span class="muted">or click to choose · .fa, .fasta, .faa, .gz</span><br>
+        <span class="muted" style="font-size:.82rem">Echinobase → Download → <i>S. purpuratus</i> Sp5.0 protein sequences (e.g. <code>sp5_0_GCF_protein.fa.gz</code>)</span></div>
+      <div id="dataset"><span class="pill demo">Demo data loaded</span></div>
+      <input type="file" id="file" accept=".fa,.fasta,.faa,.fas,.gz,.txt" hidden>
+    </div>
+    <div class="controls">
+      <label for="mc">Missed cleavages<input type="number" id="mc" min="0" max="4" value="2"></label>
+      <label for="minL">Min length (aa)<input type="number" id="minL" min="1" value="7"></label>
+      <label for="maxL">Max length (aa)<input type="number" id="maxL" min="1" value="30"></label>
+      <label for="minM">Min mass (Da)<input type="number" id="minM" min="0" value="600"></label>
+      <label for="maxM">Max mass (Da)<input type="number" id="maxM" min="0" value="4600"></label>
+      <label for="thr">Unique peptides needed<input type="number" id="thr" min="1" value="2"></label>
+      <label class="check" for="iso"><input type="checkbox" id="iso" checked> Longest isoform per gene</label>
+      <button id="run">Run digest</button>
+    </div>
+    <div class="bar" aria-hidden="true"><i id="prog"></i></div>
+    <div class="status" id="status" role="status"></div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-res">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <h2 id="h-res">How well each protease covers the proteome</h2>
+      <button class="ghost" id="copy">Copy summary as TSV</button>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div class="scroll"><table id="tbl"></table></div>
+    <p class="muted" style="font-size:.8rem">Coverage = share of each protein's residues inside at least one detectable peptide (length and mass window above, up to the set missed cleavages).
+      Unique = peptide found in only one protein in this proteome (I and L treated as identical). Click a row to chart that enzyme.</p>
+    <div class="charts">
+      <div class="chart"><h3 id="hc1">Per-protein coverage</h3><div id="c1"></div></div>
+      <div class="chart"><h3 id="hc2">Fully cleaved peptide lengths</h3><div id="c2"></div></div>
+    </div>
+  </section>
+
+  <section class="panel" aria-labelledby="h-prot">
+    <h2 id="h-prot">Inspect one protein</h2>
+    <div class="row">
+      <label for="q">Protein ID or name contains<input type="text" id="q" list="ids" placeholder="e.g. XP_ or a gene name"></label>
+      <label for="qenz" style="flex:0 1 220px">Enzyme<select id="qenz"></select></label>
+      <button id="show">Show</button>
+    </div>
+    <datalist id="ids"></datalist>
+    <div id="pinfo" class="muted" style="font-size:.88rem"></div>
+    <div class="legend"><span><i style="background:var(--cov)"></i>covered by a detectable peptide</span>
+      <span><i style="background:var(--cov);border-bottom:2px solid var(--accent)"></i>…that is unique to this protein</span>
+      <span><b style="color:var(--cut);font-family:var(--mono)">K</b> cleavage site</span></div>
+    <div class="seq" id="seq"></div>
+    <div class="scroll"><table id="ptbl"></table></div>
+  </section>
+
+  <details class="panel">
+    <summary>Method, rules and caveats</summary>
+    <ul>
+      <li>Trypsin follows the Keil rule (C-terminal to K/R, not before P). <i>Trypsin/P</i> ignores the proline rule, closer to search-engine defaults.</li>
+      <li>Lys-C: after K. Arg-C: after R, not before P. Glu-C: after E (bicarbonate). Asp-N: before D. Chymotrypsin (high specificity): after F/W/Y/L, not before P.</li>
+      <li>Masses are monoisotopic and unmodified (no carbamidomethyl-C or oxidation). Peptides with X, B, Z are dropped.</li>
+      <li>Isoform collapsing needs a gene tag in the header (<code>gene=</code>, <code>gene:</code> or <code>GN=</code>); without one every sequence is kept, and shared peptides between isoforms lower the "unique" counts.</li>
+      <li>This is a theoretical upper bound: ionisation, retention and PTMs decide what an instrument actually sees.</li>
+      <li>The page opens on a synthetic demo set (random sequences with vertebrate-like composition). Load the Echinobase file for real numbers.</li>
+      <li>For full per-protein tables, use the companion script <code>sp_digest/sp_digest.py</code>; it applies the same rules.</li>
+    </ul>
+  </details>
+</div>
+
+<script id="core" type="text/plain">
+const ENZ = {
+  trypsin:      { sites: "KR",   side: "C", blocked: "P", label: "Trypsin" },
+  trypsin_noP:  { sites: "KR",   side: "C", blocked: "",  label: "Trypsin/P" },
+  lysc:         { sites: "K",    side: "C", blocked: "",  label: "Lys-C" },
+  argc:         { sites: "R",    side: "C", blocked: "P", label: "Arg-C" },
+  gluc:         { sites: "E",    side: "C", blocked: "P", label: "Glu-C" },
+  aspn:         { sites: "D",    side: "N", blocked: "",  label: "Asp-N" },
+  chymotrypsin: { sites: "FWYL", side: "C", blocked: "P", label: "Chymotrypsin" },
+};
+const MONO = { G:57.02146,A:71.03711,S:87.03203,P:97.05276,V:99.06841,T:101.04768,C:103.00919,L:113.08406,I:113.08406,
+  N:114.04293,D:115.02694,Q:128.05858,K:128.09496,E:129.04259,M:131.04049,H:137.05891,F:147.06841,R:156.10111,
+  Y:163.06333,W:186.07931,U:150.95364,O:237.14773 };
+const WATER = 18.01056;
+
+function parseFasta(text) {
+  const out = []; let h = null, parts = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim(); if (!line) continue;
+    if (line[0] === ">") { if (h !== null) out.push([h, parts.join("")]); h = line.slice(1); parts = []; }
+    else parts.push(line.toUpperCase().replace(/\*/g, ""));
+  }
+  if (h !== null) out.push([h, parts.join("")]);
+  return out.filter(r => r[1].length);
+}
+function longestIsoform(recs) {
+  const re = /(?:gene[=:]\s*|GN=)([A-Za-z0-9_.\-]+)/, best = new Map(), rest = [];
+  for (const r of recs) {
+    const m = r[0].match(re);
+    if (!m) { rest.push(r); continue; }
+    const cur = best.get(m[1]);
+    if (!cur || r[1].length > cur[1].length) best.set(m[1], r);
+  }
+  return [...best.values(), ...rest];
+}
+function cuts(seq, enz) {
+  const { sites, side, blocked } = ENZ[enz], c = [], n = seq.length;
+  if (side === "C") { for (let i = 0; i < n - 1; i++) if (sites.includes(seq[i]) && !blocked.includes(seq[i + 1])) c.push(i + 1); }
+  else { for (let i = 1; i < n; i++) if (sites.includes(seq[i]) && !blocked.includes(seq[i - 1])) c.push(i); }
+  return c;
+}
+function mass(pep) { let m = WATER; for (const a of pep) { const v = MONO[a]; if (v === undefined) return null; m += v; } return m; }
+// Detectable peptides for one protein: Map(key -> [[start,end,mc],...]); key folds I->L
+function detectable(seq, enz, p) {
+  const b = [0, ...cuts(seq, enz), seq.length], det = new Map(), mc0Lens = [];
+  for (let i = 0; i < b.length - 1; i++) {
+    for (let mc = 0; mc <= p.mc; mc++) {
+      const j = i + 1 + mc; if (j >= b.length) break;
+      const s = b[i], e = b[j], L = e - s;
+      if (mc === 0) mc0Lens.push(L);
+      if (L < p.minL || L > p.maxL) continue;
+      const pep = seq.slice(s, e), m = mass(pep);
+      if (m === null || m < p.minM || m > p.maxM) continue;
+      const key = pep.replace(/I/g, "L");
+      let arr = det.get(key); if (!arr) det.set(key, arr = []);
+      arr.push([s, e, mc, m]);
+    }
+  }
+  return { det, mc0Lens };
+}
+</script>
+
+<script>
+// ---------- worker: the whole-proteome pass ----------
+const core = document.getElementById("core").textContent;
+{ const el = document.createElement("script"); el.textContent = core; document.head.appendChild(el); } // same rules on the main thread, for the protein inspector
+const workerSrc = core + `
+onmessage = (ev) => {
+  const { recs, p, enzymes } = ev.data, n = recs.length, res = {};
+  enzymes.forEach((enz, ei) => {
+    const owners = new Map(), dets = new Array(n), lenHist = new Array(61).fill(0);
+    for (let k = 0; k < n; k++) {
+      const { det, mc0Lens } = detectable(recs[k][1], enz, p);
+      dets[k] = det;
+      for (const L of mc0Lens) lenHist[Math.min(L, 60)]++;
+      for (const key of det.keys()) owners.set(key, (owners.get(key) || 0) + 1);
+      if ((k & 2047) === 0) postMessage({ prog: (ei + k / n / 2) / enzymes.length });
+    }
+    const cov = new Float32Array(n), cov0 = new Float32Array(n), uniq = new Int32Array(n), npep = new Int32Array(n), sites = new Int32Array(n);
+    let resCov = 0, resTot = 0;
+    for (let k = 0; k < n; k++) {
+      const seq = recs[k][1], L = seq.length, c = new Uint8Array(L), c0 = new Uint8Array(L); let u = 0;
+      for (const [key, spans] of dets[k]) {
+        if (owners.get(key) === 1) u++;
+        for (const [s, e, mc] of spans) { c.fill(1, s, e); if (mc === 0) c0.fill(1, s, e); }
+      }
+      let a = 0, a0 = 0; for (let i = 0; i < L; i++) { a += c[i]; a0 += c0[i]; }
+      cov[k] = 100 * a / L; cov0[k] = 100 * a0 / L; uniq[k] = u; npep[k] = dets[k].size; sites[k] = cuts(seq, enz).length;
+      resCov += a; resTot += L; dets[k] = null;
+      if ((k & 2047) === 0) postMessage({ prog: (ei + 0.5 + k / n / 2) / enzymes.length });
+    }
+    let uniquePeps = 0; for (const v of owners.values()) if (v === 1) uniquePeps++;
+    res[enz] = { cov, cov0, uniq, npep, sites, lenHist, distinct: owners.size, uniquePeps, residueCov: 100 * resCov / Math.max(resTot, 1) };
+  });
+  postMessage({ done: res });
+};`;
+const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: "text/javascript" }));
+
+// ---------- state ----------
+const $ = id => document.getElementById(id);
+const ENZ_LIST = Object.keys(ENZ);
+let raw = [], recs = [], results = null, chosen = "trypsin", isDemo = true, datasetName = "";
+
+function params() {
+  return { mc: +$("mc").value, minL: +$("minL").value, maxL: +$("maxL").value, minM: +$("minM").value, maxM: +$("maxM").value, thr: +$("thr").value };
+}
+const median = a => { if (!a.length) return 0; const s = Float32Array.from(a).sort(); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const mean = a => a.reduce((x, y) => x + y, 0) / Math.max(a.length, 1);
+const fmt = (v, d = 1) => v.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- demo data (synthetic, clearly labelled) ----------
+function demoProteome(n = 1200) {
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const f = { A:7.4,R:5.2,N:4.2,D:5.3,C:2.0,Q:4.4,E:6.4,G:6.6,H:2.4,I:5.3,L:9.6,K:6.4,M:2.3,F:4.0,P:5.5,S:8.3,T:5.6,W:1.2,Y:3.0,V:6.8 };
+  const aa = Object.keys(f), cum = []; let t = 0; for (const a of aa) cum.push(t += f[a]);
+  const pick = () => { const r = rnd() * t; return aa[cum.findIndex(c => c >= r)]; };
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const L = 60 + Math.floor(-Math.log(1 - rnd()) * 420);
+    let s = "M"; for (let j = 0; j < L; j++) s += pick();
+    out.push([`DEMO_${String(i + 1).padStart(4, "0")} synthetic demo protein ${i + 1}`, s]);
+  }
+  return out;
+}
+
+// ---------- loading ----------
+async function readFile(file) {
+  if (file.name.endsWith(".gz")) {
+    if (!("DecompressionStream" in window)) throw new Error("This browser cannot unzip .gz files. Unzip the file first and drop the .fa.");
+    return await new Response(file.stream().pipeThrough(new DecompressionStream("gzip"))).text();
+  }
+  return await file.text();
+}
+async function loadFile(file) {
+  $("status").textContent = `Reading ${file.name}…`;
+  try {
+    const text = await readFile(file);
+    raw = parseFasta(text);
+    if (!raw.length) throw new Error("No sequences found. Check that the file is a protein FASTA (lines starting with '>').");
+    isDemo = false; datasetName = file.name; run();
+  } catch (e) { $("status").textContent = e.message; }
+}
+const drop = $("drop");
+drop.addEventListener("click", () => $("file").click());
+drop.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } });
+$("file").addEventListener("change", e => e.target.files[0] && loadFile(e.target.files[0]));
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => e.dataTransfer.files[0] && loadFile(e.dataTransfer.files[0]));
+
+// ---------- running ----------
+let worker = null;
+function run() {
+  if (worker) worker.terminate();
+  recs = $("iso").checked ? longestIsoform(raw) : raw;
+  const residues = recs.reduce((a, r) => a + r[1].length, 0);
+  $("dataset").innerHTML = isDemo ? `<span class="pill demo">Demo data: synthetic, not S. purpuratus</span>`
+    : `<span class="pill">${esc(datasetName)}</span>`;
+  $("status").textContent = `${raw.length.toLocaleString()} sequences, ${recs.length.toLocaleString()} analysed, ${residues.toLocaleString()} residues. Digesting…`;
+  $("run").disabled = true;
+  const t0 = performance.now(), p = params();
+  worker = new Worker(workerURL);
+  worker.onmessage = ev => {
+    if (ev.data.prog !== undefined) { $("prog").style.width = (100 * ev.data.prog).toFixed(1) + "%"; return; }
+    results = ev.data.done; worker.terminate(); worker = null;
+    $("prog").style.width = "100%"; $("run").disabled = false;
+    $("status").textContent = `${recs.length.toLocaleString()} proteins · ${residues.toLocaleString()} residues · ${ENZ_LIST.length} enzymes in ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+    $("ids").innerHTML = recs.slice(0, 5000).map(r => `<option value="${esc(r[0].split(/\s/)[0])}">`).join("");
+    render(); showProtein(recs[0][0].split(/\s/)[0]);
+  };
+  worker.onerror = e => { $("status").textContent = "Digest failed: " + e.message + " (very large files may exceed browser memory; use sp_digest.py)."; $("run").disabled = false; };
+  worker.postMessage({ recs, p, enzymes: ENZ_LIST });
+}
+$("run").addEventListener("click", run);
+
+// ---------- summary ----------
+function summaries() {
+  const p = params();
+  return ENZ_LIST.map(enz => {
+    const r = results[enz], n = r.cov.length;
+    let thr = 0, none = 0; for (let k = 0; k < n; k++) { if (r.uniq[k] >= p.thr) thr++; if (r.npep[k] === 0) none++; }
+    return { enz, label: ENZ[enz].label, medCov: median(r.cov), medCov0: median(r.cov0), residueCov: r.residueCov,
+      pctThr: 100 * thr / n, pctNone: 100 * none / n, distinct: r.distinct, pctUniquePeps: 100 * r.uniquePeps / Math.max(r.distinct, 1),
+      medSites: median(r.sites) };
+  });
+}
+function render() {
+  const S = summaries(), p = params(), t = S.find(s => s.enz === "trypsin");
+  $("kpis").innerHTML = [
+    [fmt(t.medCov) + "%", "median trypsin coverage"],
+    [fmt(t.pctThr) + "%", `proteins with ≥${p.thr} unique tryptic peptides`],
+    [fmt(t.pctNone) + "%", "proteins with no detectable tryptic peptide"],
+    [t.distinct.toLocaleString(), "distinct detectable tryptic peptides"],
+  ].map(([b, s]) => `<div class="kpi"><b>${b}</b><span>${s}</span></div>`).join("");
+  const best = Math.max(...S.map(s => s.medCov));
+  $("tbl").innerHTML = `<thead><tr><th>Enzyme</th><th>Median coverage</th><th>No missed cl.</th><th>Residues covered</th>
+    <th>≥${p.thr} unique peptides</th><th>No peptide</th><th>Distinct peptides</th><th>Unique peptides</th><th>Median sites</th></tr></thead><tbody>` +
+    S.map(s => `<tr data-enz="${s.enz}" class="${s.enz === chosen ? "primary" : ""}" tabindex="0"><td><b>${s.label}</b></td>
+      <td>${fmt(s.medCov)}%<span class="meter"><i style="width:${(100 * s.medCov / Math.max(best, 1)).toFixed(1)}%"></i></span></td>
+      <td>${fmt(s.medCov0)}%</td><td>${fmt(s.residueCov)}%</td><td>${fmt(s.pctThr)}%</td><td>${fmt(s.pctNone)}%</td>
+      <td>${s.distinct.toLocaleString()}</td><td>${fmt(s.pctUniquePeps)}%</td><td>${s.medSites}</td></tr>`).join("") + "</tbody>";
+  document.querySelectorAll("tr[data-enz]").forEach(tr => {
+    const pick = () => { chosen = tr.dataset.enz; render(); };
+    tr.addEventListener("click", pick); tr.addEventListener("keydown", e => e.key === "Enter" && pick());
+  });
+  const r = results[chosen];
+  $("hc1").textContent = `${ENZ[chosen].label}: proteins by coverage`;
+  $("hc2").textContent = `${ENZ[chosen].label}: fully cleaved peptide lengths`;
+  const bins = new Array(20).fill(0); for (const c of r.cov) bins[Math.min(19, Math.floor(c / 5))]++;
+  $("c1").innerHTML = barChart(bins, i => i * 5, "Sequence coverage (%)", "Proteins", null, 5);
+  $("c2").innerHTML = barChart(r.lenHist.slice(1), i => i + 1, "Peptide length (aa, 60 = 60+)", "Peptides", [p.minL - 1, p.maxL - 1], 10);
+  $("qenz").innerHTML = ENZ_LIST.map(e => `<option value="${e}" ${e === chosen ? "selected" : ""}>${ENZ[e].label}</option>`).join("");
+}
+function barChart(vals, xval, xlab, ylab, band, tickEvery) {
+  const W = 520, H = 230, m = { l: 52, r: 10, t: 10, b: 40 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const max = Math.max(...vals, 1), step = niceStep(max), top = Math.ceil(max / step) * step, bw = iw / vals.length;
+  let g = "";
+  for (let v = 0; v <= top; v += step) { const y = m.t + ih - ih * v / top;
+    g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y}" y2="${y}" stroke="var(--line)" stroke-width="1"/><text x="${m.l - 6}" y="${y + 4}" text-anchor="end">${v.toLocaleString()}</text>`; }
+  if (band) g += `<rect x="${m.l + band[0] * bw}" y="${m.t}" width="${(band[1] - band[0] + 1) * bw}" height="${ih}" fill="var(--teal)" opacity=".12"/>
+    <text x="${m.l + (band[0] + band[1] + 1) / 2 * bw}" y="${m.t + 12}" text-anchor="middle" style="fill:var(--teal)">detectable window</text>`;
+  vals.forEach((v, i) => { const h = ih * v / top;
+    g += `<rect x="${m.l + i * bw + 0.5}" y="${m.t + ih - h}" width="${Math.max(bw - 1, 0.5)}" height="${h}" fill="var(--accent)"><title>${xval(i)}: ${v.toLocaleString()}</title></rect>`;
+    if (i % tickEvery === 0) g += `<text x="${m.l + i * bw}" y="${H - m.b + 16}" text-anchor="middle">${xval(i)}</text>`; });
+  if (tickEvery === 5) g += `<text x="${m.l + iw}" y="${H - m.b + 16}" text-anchor="middle">100</text>`;
+  g += `<text x="${m.l + iw / 2}" y="${H - 4}" text-anchor="middle">${xlab}</text>
+    <text transform="translate(12 ${m.t + ih / 2}) rotate(-90)" text-anchor="middle">${ylab}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${ylab} by ${xlab}">${g}</svg>`;
+}
+function niceStep(max) { const raw = max / 5, p = 10 ** Math.floor(Math.log10(raw)), f = raw / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+
+$("copy").addEventListener("click", async () => {
+  if (!results) return;
+  const S = summaries(), cols = Object.keys(S[0]);
+  const tsv = [`# ${isDemo ? "DEMO synthetic data" : datasetName}; params ${JSON.stringify(params())}`, cols.join("\t"),
+    ...S.map(s => cols.map(c => typeof s[c] === "number" ? +s[c].toFixed(3) : s[c]).join("\t"))].join("\n");
+  try { await navigator.clipboard.writeText(tsv); $("copy").textContent = "Copied"; }
+  catch { $("status").textContent = "Clipboard blocked here. Summary TSV:\n" + tsv; }
+  setTimeout(() => $("copy").textContent = "Copy summary as TSV", 1500);
+});
+
+// ---------- one-protein inspector ----------
+function showProtein(q) {
+  if (!results) return;
+  q = (q || $("q").value).trim().toLowerCase();
+  const k = recs.findIndex(r => r[0].split(/\s/)[0].toLowerCase() === q) >= 0
+    ? recs.findIndex(r => r[0].split(/\s/)[0].toLowerCase() === q)
+    : recs.findIndex(r => r[0].toLowerCase().includes(q));
+  if (k < 0) { $("pinfo").textContent = `No protein matches "${q}".`; return; }
+  const enz = $("qenz").value || chosen, [h, seq] = recs[k], r = results[enz], p = params();
+  const { det } = detectable(seq, enz, p);
+  // uniqueness from the proteome pass is per-protein count only, so recompute per peptide against the proteome lazily
+  const owners = peptideOwners(enz, [...det.keys()]);
+  const cov = new Uint8Array(seq.length), uq = new Uint8Array(seq.length);
+  for (const [key, spans] of det) for (const [s, e] of spans) { cov.fill(1, s, e); if (owners.get(key) === 1) uq.fill(1, s, e); }
+  const cut = new Set(cuts(seq, enz).map(i => ENZ[enz].side === "C" ? i - 1 : i));
+  let html = "";
+  for (let i = 0; i < seq.length; i++) {
+    const cls = (uq[i] ? "u" : cov[i] ? "c" : "") + (cut.has(i) ? " k" : "");
+    html += cls ? `<span class="${cls.trim()}">${seq[i]}</span>` : seq[i];
+  }
+  $("seq").innerHTML = html;
+  $("pinfo").innerHTML = `<b style="color:var(--fg)">${esc(h)}</b><br>${seq.length} aa · ${ENZ[enz].label}: ${fmt(r.cov[k])}% coverage · ${r.npep[k]} detectable peptides · ${r.uniq[k]} unique · ${r.sites[k]} cleavage sites`;
+  const rows = [...det].map(([key, spans]) => { const [s, e, mc, m] = spans[0]; return { s, e, mc, m, pep: seq.slice(s, e), u: owners.get(key) === 1 }; })
+    .sort((a, b) => a.s - b.s || a.e - b.e).filter(x => x.mc === 0).slice(0, 200);
+  $("ptbl").innerHTML = `<thead><tr><th>Fully cleaved detectable peptide</th><th>Start</th><th>End</th><th>Length</th><th>[M] mono (Da)</th><th>Unique</th></tr></thead><tbody>` +
+    rows.map(x => `<tr><td style="font-family:var(--mono)">${x.pep}</td><td>${x.s + 1}</td><td>${x.e}</td><td>${x.e - x.s}</td><td>${x.m.toFixed(4)}</td><td>${x.u ? "yes" : "shared"}</td></tr>`).join("") + "</tbody>";
+}
+// Count proteins containing each peptide (scan the proteome once for these keys only)
+function peptideOwners(enz, keys) {
+  const want = new Map(keys.map(k => [k, 0])), p = params();
+  for (const [, seq] of recs) { const { det } = detectable(seq, enz, p); for (const k of det.keys()) if (want.has(k)) want.set(k, want.get(k) + 1); }
+  return want;
+}
+$("show").addEventListener("click", () => showProtein());
+$("q").addEventListener("keydown", e => e.key === "Enter" && showProtein());
+
+raw = demoProteome(); run();
+</script>
