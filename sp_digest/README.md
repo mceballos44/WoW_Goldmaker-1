@@ -14,6 +14,7 @@ peptides that bottom-up MS can detect?
 | `enzymes.py` | Cleavage rules (sites, side, blocking residue). Add enzymes here. |
 | `config/default.json` | All digest parameters (missed cleavages, length/mass window, isoform handling). Kept separate from the code; copy it to make a run-specific config. |
 | `web/sp_digest.html` | Same rules in the browser: drop the FASTA, get the enzyme comparison, charts and a per-protein coverage map. Published as a private Claude artifact. |
+| `EVALUATING_PROTEASES.md` | How to judge a protease: in silico metrics, experimental QC metrics and targets, comparing prediction with observation. |
 | `tests/test_digest.py` | Unit tests for the cleavage rules, masses and isoform collapsing. |
 
 ## Getting the data
