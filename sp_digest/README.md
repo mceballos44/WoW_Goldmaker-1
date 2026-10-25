@@ -19,7 +19,7 @@ peptides that bottom-up MS can detect?
 ## Getting the data
 
 Echinobase → Download → *S. purpuratus* genome Sp5.0 → protein FASTA
-(https://www.echinobase.org/echinobase/static-echinobase/ftpDatafiles.jsp, e.g. `sp5_0_GCF_protein.fa.gz`).
+(https://www.echinobase.org, Download menu). The exact file name was not verified from this sandbox.
 UniProt reference proteome UP000007110 is an alternative (`GN=` headers allow isoform collapsing).
 
 ## Run
